@@ -1,15 +1,16 @@
 use eframe::egui;
 use std::collections::HashMap;
 use egui_material_icons as icons;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Task {
     id: usize,
     text: String,
     completed: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Project {
     id: usize,
     name: String,
@@ -17,15 +18,22 @@ struct Project {
     expanded: bool,
 }
 
+#[derive(Serialize, Deserialize)]
 struct TodoApp {
     projects: Vec<Project>,
     next_project_id: usize,
     next_task_id: usize,
+    #[serde(skip)]
     new_project_name: String,
+    #[serde(skip)]
     editing_project: Option<usize>,
+    #[serde(skip)]
     editing_task: Option<(usize, usize)>, // (project_id, task_id)
+    #[serde(skip)]
     new_task_texts: HashMap<usize, String>, // project_id -> new task text
+    #[serde(skip)]
     edit_project_text: String,
+    #[serde(skip)]
     edit_task_text: String,
 }
 
@@ -45,9 +53,21 @@ impl Default for TodoApp {
     }
 }
 
-impl TodoApp {}
+impl TodoApp {
+    fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        // Load data from storage if available
+        if let Some(storage) = cc.storage {
+            return eframe::get_value(storage, "todo_app_data").unwrap_or_default();
+        }
+        Default::default()
+    }
+}
 
 impl eframe::App for TodoApp {
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        eframe::set_value(storage, "todo_app_data", self);
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ctx, |ui| {
             // Fixed font sizes
@@ -306,7 +326,7 @@ fn main() -> Result<(), eframe::Error> {
             egui_material_icons::initialize(&cc.egui_ctx);
 
             // Don't override fonts at all to preserve material icons
-            Ok(Box::new(TodoApp::default()))
+            Ok(Box::new(TodoApp::new(cc)))
         }),
     )
 }
