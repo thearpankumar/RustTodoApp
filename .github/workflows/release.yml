@@ -1,9 +1,5 @@
 name: Build and Release (tag)
 
-# Allow the workflow to create releases and upload assets using the GITHUB_TOKEN
-permissions:
-  contents: write
-
 on:
   push:
     # Run when a tag is pushed
@@ -14,6 +10,8 @@ jobs:
   create_release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     outputs:
       upload_url: ${{ steps.create_release.outputs.upload_url }}
     steps:
@@ -21,19 +19,21 @@ jobs:
 
       - name: Create Release
         id: create_release
-        uses: actions/create-release@v1
+        uses: softprops/action-gh-release@v1
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          tag_name: ${{ github.ref_name }}
-          release_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
           body: "Automatic release for tag ${{ github.ref_name }}"
           draft: false
           prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build:
     name: Build and upload artifacts
     needs: create_release
     runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: write
     strategy:
       matrix:
         runner: [ubuntu-latest, windows-latest, macos-latest]
@@ -42,11 +42,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Set up Rust
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
-          profile: minimal
-          override: true
+          components: rustfmt, clippy
 
       - name: Build (release) on Linux/macOS
         if: matrix.runner != 'windows-latest'
@@ -91,7 +90,7 @@ jobs:
             echo "Binary not found at expected locations"
             exit 1
           fi
-          cp "$BIN" release_artifacts/
+          cp "$BIN" release_artifacts/;
           tar -C release_artifacts -czf release_artifacts/todo_app-${{ github.ref_name }}-macos.tar.gz $(basename "$BIN")
           rm -f release_artifacts/$(basename "$BIN")
         shell: bash
@@ -129,32 +128,27 @@ jobs:
         run: |
           if (Test-Path release_artifacts) { Get-ChildItem release_artifacts | Format-Table } else { Write-Host "No artifacts produced on this runner." }
 
-      # Upload asset for Linux
-      - name: Upload .deb to GitHub Release
+      # Upload assets
+      - name: Upload Release Assets
+        uses: softprops/action-gh-release@v1
         if: matrix.runner == 'ubuntu-latest'
-        uses: actions/upload-release-asset@v1
         with:
-          upload_url: ${{ needs.create_release.outputs.upload_url }}
-          asset_path: release_artifacts/todo_app-${{ github.ref_name }}-linux.deb
-          asset_name: todo_app-${{ github.ref_name }}-linux.deb
-          asset_content_type: application/vnd.debian.binary-package
+          files: release_artifacts/todo_app-${{ github.ref_name }}-linux.deb
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # Upload asset for macOS
-      - name: Upload tar.gz to GitHub Release
+      - name: Upload Release Assets (macOS)
+        uses: softprops/action-gh-release@v1
         if: matrix.runner == 'macos-latest'
-        uses: actions/upload-release-asset@v1
         with:
-          upload_url: ${{ needs.create_release.outputs.upload_url }}
-          asset_path: release_artifacts/todo_app-${{ github.ref_name }}-macos.tar.gz
-          asset_name: todo_app-${{ github.ref_name }}-macos.tar.gz
-          asset_content_type: application/gzip
+          files: release_artifacts/todo_app-${{ github.ref_name }}-macos.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # Upload asset for Windows
-      - name: Upload zip to GitHub Release
+      - name: Upload Release Assets (Windows)
+        uses: softprops/action-gh-release@v1
         if: matrix.runner == 'windows-latest'
-        uses: actions/upload-release-asset@v1
         with:
-          upload_url: ${{ needs.create_release.outputs.upload_url }}
-          asset_path: release_artifacts/todo_app-${{ github.ref_name }}-windows.zip
-          asset_name: todo_app-${{ github.ref_name }}-windows.zip
-          asset_content_type: application/zip
+          files: release_artifacts/todo_app-${{ github.ref_name }}-windows.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
