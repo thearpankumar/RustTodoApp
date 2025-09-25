@@ -76,7 +76,11 @@ impl eframe::App for TodoApp {
             let button_size = 14.0;
             let text_size = 14.0;
 
-            ui.heading(egui::RichText::new("Todo App").size(heading_size));
+            ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                    ui.heading(egui::RichText::new("Todo App").size(heading_size));
+                });
+            });
             ui.separator();
 
             // Add new project section
@@ -94,13 +98,15 @@ impl eframe::App for TodoApp {
 
             ui.separator();
 
-            // Display projects
-            let mut projects_to_remove = Vec::new();
-            let mut project_actions = Vec::new(); // Store actions to perform after iteration
-            let mut task_actions = Vec::new(); // Store task actions
+            // Display projects in a scroll area
+            let (projects_to_remove, project_actions, task_actions) = egui::ScrollArea::vertical()
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    let mut projects_to_remove = Vec::new();
+                    let mut project_actions = Vec::new(); // Store actions to perform after iteration
+                    let mut task_actions = Vec::new(); // Store task actions
 
-
-            for (project_idx, project) in self.projects.iter_mut().enumerate() {
+                    for (project_idx, project) in self.projects.iter_mut().enumerate() {
                 ui.group(|ui| {
                     // Project header
                     ui.horizontal(|ui| {
@@ -233,7 +239,10 @@ impl eframe::App for TodoApp {
                     }
                 });
                 ui.add_space(8.0);
-            }
+                    }
+
+                    (projects_to_remove, project_actions, task_actions)
+                }).inner;
 
             // Process project actions
             for (action, project_id, text) in project_actions {
