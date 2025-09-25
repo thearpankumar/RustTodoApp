@@ -72,9 +72,10 @@ impl eframe::App for TodoApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             // Fixed font sizes
             let heading_size = 24.0;
+            let project_title_size = 20.0; // Larger font for project titles
             let label_size = 16.0;
             let button_size = 14.0;
-            let text_size = 14.0;
+            let text_size = 16.0; // Increased task text size for better visibility
 
             ui.horizontal(|ui| {
                 ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
@@ -107,7 +108,11 @@ impl eframe::App for TodoApp {
                     let mut task_actions = Vec::new(); // Store task actions
 
                     for (project_idx, project) in self.projects.iter_mut().enumerate() {
-                ui.group(|ui| {
+                        ui.push_id(project.id, |ui| {
+                            egui::Frame::group(ui.style())
+                                .inner_margin(egui::Margin::same(8))
+                                .show(ui, |ui| {
+                                ui.set_width(ui.available_width());
                     // Project header
                     ui.horizontal(|ui| {
                         // Expand/collapse button
@@ -146,7 +151,7 @@ impl eframe::App for TodoApp {
                             }
                         } else {
                             // Display mode: show label with edit button
-                            ui.label(egui::RichText::new(&project.name).size(label_size));
+                            ui.label(egui::RichText::new(&project.name).size(project_title_size));
                             if ui.button(
                                 egui::RichText::new(icons::icons::ICON_EDIT).size(button_size)
                             ).clicked() {
@@ -237,8 +242,9 @@ impl eframe::App for TodoApp {
                             });
                         });
                     }
-                });
-                ui.add_space(8.0);
+                                });
+                            });
+                        ui.add_space(8.0);
                     }
 
                     (projects_to_remove, project_actions, task_actions)
