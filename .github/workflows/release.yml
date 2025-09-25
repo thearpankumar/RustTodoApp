@@ -1,0 +1,134 @@
+name: Build and Release (tag)
+
+on:
+  push:
+    # Run when a tag is pushed
+    tags:
+      - '**'
+
+jobs:
+  create_release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          release_name: ${{ github.ref_name }}
+          body: "Automatic release for tag ${{ github.ref_name }}"
+          draft: false
+          prerelease: false
+
+  build:
+    name: Build and upload artifacts
+    needs: create_release
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        runner: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+          override: true
+
+      - name: Build (release) on Linux/macOS
+        if: matrix.runner != 'windows-latest'
+        run: |
+          set -eux
+          cargo build --release
+        shell: bash
+
+      - name: Build (release) on Windows
+        if: matrix.runner == 'windows-latest'
+        shell: pwsh
+        run: |
+          cargo build --release
+
+      # Packaging for Linux: produce a .deb using cargo-deb
+      - name: Install cargo-deb (Linux)
+        if: matrix.runner == 'ubuntu-latest'
+        run: |
+          cargo install cargo-deb --locked
+
+      - name: Create .deb (Linux)
+        if: matrix.runner == 'ubuntu-latest'
+        run: |
+          set -eux
+          cargo deb --no-build
+          mkdir -p release_artifacts
+          deb_file=$(ls target/debian/*.deb | head -n1)
+          cp "$deb_file" "release_artifacts/todo_app-${{ github.ref_name }}-linux.deb"
+        shell: bash
+
+      # Packaging for macOS: bundle the binary into a tar.gz
+      - name: Create tar.gz (macOS)
+        if: matrix.runner == 'macos-latest'
+        run: |
+          set -eux
+          mkdir -p release_artifacts
+          BIN=target/release/todo_app
+          if [ ! -f "$BIN" ]; then
+            BIN=target/release/todo-app
+          fi
+          if [ ! -f "$BIN" ]; then
+            echo "Binary not found at expected locations"
+            exit 1
+          fi
+          cp "$BIN" release_artifacts/
+          tar -C release_artifacts -czf release_artifacts/todo_app-${{ github.ref_name }}-macos.tar.gz $(basename "$BIN")
+          rm -f release_artifacts/$(basename "$BIN")
+        shell: bash
+
+      # Packaging for Windows: zip the .exe
+      - name: Create zip (Windows)
+        if: matrix.runner == 'windows-latest'
+        shell: pwsh
+        run: |
+          $out = "release_artifacts"
+          New-Item -ItemType Directory -Path $out -Force | Out-Null
+          $exe = "target\release\todo_app.exe"
+          if (-not (Test-Path $exe)) {
+            $exe = "target\release\todo-app.exe"
+          }
+          if (-not (Test-Path $exe)) {
+            Write-Error "Windows binary not found at expected locations"
+            exit 1
+          }
+          $zipPath = Join-Path $out "todo_app-${{ github.ref_name }}-windows.zip"
+          Compress-Archive -Path $exe -DestinationPath $zipPath -Force
+
+      - name: List artifacts
+        run: |
+          if [ -d release_artifacts ]; then
+            ls -la release_artifacts || true
+          else
+            echo "No artifacts produced on this runner."
+          fi
+        if: matrix.runner != 'windows-latest'
+
+      - name: List artifacts (Windows)
+        if: matrix.runner == 'windows-latest'
+        shell: pwsh
+        run: |
+          if (Test-Path release_artifacts) { Get-ChildItem release_artifacts | Format-Table } else { Write-Host "No artifacts produced on this runner." }
+
+      - name: Upload artifact to GitHub Release
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ needs.create_release.outputs.upload_url }}
+          asset_path: |
+            ${{ runner.os == 'Windows' && format('release_artifacts\todo_app-{0}-windows.zip', github.ref_name) || 'release_artifacts/todo_app-' + github.ref_name + (runner.os == 'macOS' ? '-macos.tar.gz' : '-linux.deb') }}
+          asset_name: ${{ runner.os == 'Windows' && format('todo_app-{0}-windows.zip', github.ref_name) || 'todo_app-' + github.ref_name + (runner.os == 'macOS' ? '-macos.tar.gz' : '-linux.deb') }}
+          asset_content_type: application/octet-stream
