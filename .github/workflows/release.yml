@@ -124,11 +124,32 @@ jobs:
         run: |
           if (Test-Path release_artifacts) { Get-ChildItem release_artifacts | Format-Table } else { Write-Host "No artifacts produced on this runner." }
 
-      - name: Upload artifact to GitHub Release
+      # Upload asset for Linux
+      - name: Upload .deb to GitHub Release
+        if: matrix.runner == 'ubuntu-latest'
         uses: actions/upload-release-asset@v1
         with:
           upload_url: ${{ needs.create_release.outputs.upload_url }}
-          asset_path: |
-            ${{ runner.os == 'Windows' && format('release_artifacts\todo_app-{0}-windows.zip', github.ref_name) || 'release_artifacts/todo_app-' + github.ref_name + (runner.os == 'macOS' ? '-macos.tar.gz' : '-linux.deb') }}
-          asset_name: ${{ runner.os == 'Windows' && format('todo_app-{0}-windows.zip', github.ref_name) || 'todo_app-' + github.ref_name + (runner.os == 'macOS' ? '-macos.tar.gz' : '-linux.deb') }}
-          asset_content_type: application/octet-stream
+          asset_path: release_artifacts/todo_app-${{ github.ref_name }}-linux.deb
+          asset_name: todo_app-${{ github.ref_name }}-linux.deb
+          asset_content_type: application/vnd.debian.binary-package
+
+      # Upload asset for macOS
+      - name: Upload tar.gz to GitHub Release
+        if: matrix.runner == 'macos-latest'
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ needs.create_release.outputs.upload_url }}
+          asset_path: release_artifacts/todo_app-${{ github.ref_name }}-macos.tar.gz
+          asset_name: todo_app-${{ github.ref_name }}-macos.tar.gz
+          asset_content_type: application/gzip
+
+      # Upload asset for Windows
+      - name: Upload zip to GitHub Release
+        if: matrix.runner == 'windows-latest'
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ needs.create_release.outputs.upload_url }}
+          asset_path: release_artifacts/todo_app-${{ github.ref_name }}-windows.zip
+          asset_name: todo_app-${{ github.ref_name }}-windows.zip
+          asset_content_type: application/zip
