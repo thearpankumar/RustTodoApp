@@ -70,10 +70,10 @@ jobs:
         if: matrix.runner == 'ubuntu-latest'
         run: |
           set -eux
-          cargo deb --no-build
           mkdir -p release_artifacts
-          deb_file=$(ls target/debian/*.deb | head -n1)
-          cp "$deb_file" "release_artifacts/todo_app-${{ github.ref_name }}-linux.deb"
+          cp target/release/todo_app release_artifacts/todo_app-${{ github.ref_name }}-linux
+          tar -czf release_artifacts/todo_app-${{ github.ref_name }}-linux.tar.gz -C release_artifacts todo_app-${{ github.ref_name }}-linux
+          rm release_artifacts/todo_app-${{ github.ref_name }}-linux
         shell: bash
 
       # Packaging for macOS: bundle the binary into a tar.gz
@@ -90,7 +90,7 @@ jobs:
             echo "Binary not found at expected locations"
             exit 1
           fi
-          cp "$BIN" release_artifacts/;
+          cp "$BIN" release_artifacts/
           tar -C release_artifacts -czf release_artifacts/todo_app-${{ github.ref_name }}-macos.tar.gz $(basename "$BIN")
           rm -f release_artifacts/$(basename "$BIN")
         shell: bash
@@ -133,7 +133,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         if: matrix.runner == 'ubuntu-latest'
         with:
-          files: release_artifacts/todo_app-${{ github.ref_name }}-linux.deb
+          files: release_artifacts/todo_app-${{ github.ref_name }}-linux.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
