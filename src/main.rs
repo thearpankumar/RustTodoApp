@@ -37,11 +37,9 @@ struct TodoApp {
     #[serde(skip)]
     edit_task_text: String,
     #[serde(skip)]
-    adding_task_mode: bool, // Whether we're in task creation mode
+    adding_task_to_project: Option<usize>, // Project ID for right-click task creation
     #[serde(skip)]
-    selected_project_for_task: Option<usize>, // Which project to add task to
-    #[serde(skip)]
-    new_task_text: String, // Text for the new task being created
+    right_click_task_text: HashMap<usize, String>, // Task text for each project's right-click creation
 }
 
 impl Default for TodoApp {
@@ -56,9 +54,8 @@ impl Default for TodoApp {
             new_task_texts: HashMap::new(),
             edit_project_text: String::new(),
             edit_task_text: String::new(),
-            adding_task_mode: false,
-            selected_project_for_task: None,
-            new_task_text: String::new(),
+            adding_task_to_project: None,
+            right_click_task_text: HashMap::new(),
         }
     }
 }
@@ -130,72 +127,12 @@ impl eframe::App for TodoApp {
 
             ui.add_space(16.0);
 
-            // Global Add Task button
+            // Simplified instruction for users
             ui.horizontal(|ui| {
-                if ui
-                    .button(
-                        egui::RichText::new(format!("{} Add Task", icons::icons::ICON_ADD))
-                            .size(button_size),
-                    )
-                    .clicked()
-                {
-                    self.adding_task_mode = !self.adding_task_mode;
-                    if !self.adding_task_mode {
-                        // Reset when canceling
-                        self.selected_project_for_task = None;
-                        self.new_task_text.clear();
-                    }
-                }
-
-                if self.adding_task_mode {
-                    ui.label("Cancel with button again");
-                }
+                ui.label(egui::RichText::new(format!("Right-click on the expand/collapse button ({}/{}) to add tasks directly!",
+                    icons::icons::ICON_CHEVRON_RIGHT,
+                    icons::icons::ICON_EXPAND_MORE)).size(label_size).color(egui::Color32::GRAY));
             });
-
-            // Task creation UI (only shown when in adding_task_mode)
-            if self.adding_task_mode {
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("Select Project:").size(label_size));
-
-                    // Project selection dropdown
-                    egui::ComboBox::from_id_salt("project_selector")
-                        .selected_text(if let Some(selected_id) = self.selected_project_for_task {
-                            self.projects
-                                .iter()
-                                .find(|p| p.id == selected_id)
-                                .map(|p| p.name.as_str())
-                                .unwrap_or("Select Project")
-                        } else {
-                            "Select Project"
-                        })
-                        .show_ui(ui, |ui| {
-                            for project in &self.projects {
-                                ui.selectable_value(
-                                    &mut self.selected_project_for_task,
-                                    Some(project.id),
-                                    &project.name,
-                                );
-                            }
-                        });
-                });
-
-                // Task input field (only shown when project is selected)
-                if self.selected_project_for_task.is_some() {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Task Text:").size(label_size));
-                        let response = ui.text_edit_singleline(&mut self.new_task_text);
-
-                        if ui
-                            .button(egui::RichText::new("Create Task").size(button_size))
-                            .clicked()
-                            || (response.lost_focus()
-                                && ui.input(|i| i.key_pressed(egui::Key::Enter)))
-                        {
-                            self.create_new_task();
-                        }
-                    });
-                }
-            }
 
             ui.add_space(16.0);
 
@@ -211,26 +148,31 @@ impl eframe::App for TodoApp {
 
                     for (project_idx, project) in self.projects.iter_mut().enumerate() {
                         ui.push_id(project.id, |ui| {
-                            egui::Frame::group(ui.style())
+                            let _frame_response = egui::Frame::group(ui.style())
                                 .inner_margin(egui::Margin::same(16))
                                 .show(ui, |ui| {
                                     ui.set_width(ui.available_width());
                                     // Project header
                                     ui.horizontal(|ui| {
-                                        // Expand/collapse button
+                                        // Expand/collapse button with right-click to add task
                                         let expand_icon = if project.expanded {
                                             icons::icons::ICON_EXPAND_MORE
                                         } else {
                                             icons::icons::ICON_CHEVRON_RIGHT
                                         };
-                                        if ui
-                                            .button(
-                                                egui::RichText::new(expand_icon).size(button_size),
-                                            )
-                                            .clicked()
-                                        {
+                                        let expand_response = ui.button(
+                                            egui::RichText::new(expand_icon).size(button_size),
+                                        );
+
+                                        if expand_response.clicked() {
                                             project.expanded = !project.expanded;
                                         }
+
+                                        // Right-click on expand button to add task
+                                        if expand_response.secondary_clicked() {
+                                            project_actions.push(("add_task", project.id, String::new()));
+                                        }
+
 
                                         // Project name and controls
                                         if self.editing_project == Some(project.id) {
@@ -452,9 +394,36 @@ impl eframe::App for TodoApp {
                                             for &idx in tasks_to_remove.iter().rev() {
                                                 project.tasks.remove(idx);
                                             }
+
+                                            // Show inline task creation UI when this project is selected for task addition
+                                            if self.adding_task_to_project == Some(project.id) {
+                                                ui.add_space(8.0);
+                                                ui.horizontal(|ui| {
+                                                    ui.label("New Task:");
+                                                    let task_text = self.right_click_task_text.get_mut(&project.id).unwrap();
+                                                    let response = ui.text_edit_singleline(task_text);
+
+                                                    if ui.button(icons::icons::ICON_CHECK).clicked()
+                                                        || (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+                                                    {
+                                                        if !task_text.trim().is_empty() {
+                                                            project_actions.push(("create_task", project.id, task_text.clone()));
+                                                        }
+                                                        project_actions.push(("cancel_add_task", project.id, String::new()));
+                                                    }
+
+                                                    if ui.button(icons::icons::ICON_CLOSE).clicked()
+                                                        || (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)))
+                                                    {
+                                                        project_actions.push(("cancel_add_task", project.id, String::new()));
+                                                    }
+                                                });
+                                            }
+
                                         });
                                     }
                                 });
+
                         });
                         ui.add_space(16.0);
                     }
@@ -472,6 +441,20 @@ impl eframe::App for TodoApp {
                     }
                     "stop_edit" => {
                         self.editing_project = None;
+                    }
+                    "add_task" => {
+                        self.adding_task_to_project = Some(project_id);
+                        // Initialize the text field for this project if it doesn't exist
+                        self.right_click_task_text.entry(project_id).or_insert_with(String::new);
+                    }
+                    "create_task" => {
+                        self.add_task_to_project(project_id, text);
+                    }
+                    "cancel_add_task" => {
+                        self.adding_task_to_project = None;
+                        if let Some(task_text) = self.right_click_task_text.get_mut(&project_id) {
+                            task_text.clear();
+                        }
                     }
                     _ => {}
                 }
@@ -516,24 +499,16 @@ impl TodoApp {
         }
     }
 
-    fn create_new_task(&mut self) {
-        if let Some(project_id) = self.selected_project_for_task {
-            if !self.new_task_text.trim().is_empty() {
+    fn add_task_to_project(&mut self, project_id: usize, task_text: String) {
+        if let Some(project) = self.projects.iter_mut().find(|p| p.id == project_id) {
+            if !task_text.trim().is_empty() {
                 let task = Task {
                     id: self.next_task_id,
-                    text: self.new_task_text.clone(),
+                    text: task_text.trim().to_string(),
                     completed: false,
                 };
-
-                if let Some(project) = self.projects.iter_mut().find(|p| p.id == project_id) {
-                    project.tasks.push(task);
-                    self.next_task_id += 1;
-
-                    // Reset the task creation state
-                    self.new_task_text.clear();
-                    self.adding_task_mode = false;
-                    self.selected_project_for_task = None;
-                }
+                project.tasks.push(task);
+                self.next_task_id += 1;
             }
         }
     }
