@@ -3,4 +3,4 @@
 ---
 <h4 align="center"> This is all your todo app should do. </h4>
 
-![App Screenshot](assets/app_ss.png)
+![App Screenshot](assets/app_ss3.png)
