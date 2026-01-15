@@ -704,10 +704,7 @@ impl TodoApp {
             // translation_delta() provides panning from scrolling or pan gestures
             let pan_delta = ui.input(|i| i.translation_delta());
             if pan_delta != egui::Vec2::ZERO {
-                self.notes_canvas.scene_rect = self
-                    .notes_canvas
-                    .scene_rect
-                    .translate(pan_delta);
+                self.notes_canvas.scene_rect = self.notes_canvas.scene_rect.translate(pan_delta);
             }
 
             // Render background with pan offset
