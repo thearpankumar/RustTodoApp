@@ -145,21 +145,7 @@ impl TodoApp {
             // Debug Mode: Try loading from local file
             if let Ok(file) = File::open("todo_data.json") {
                 let reader = BufReader::new(file);
-                match serde_json::from_reader(reader) {
-                    Ok(app) => {
-                        // We need to re-initialize transient fields that aren't serialized
-                        // (Though most of your fields seem serialized or have defaults,
-                        //  but we must assume `app` came from JSON)
-                        // Important: context_menu_pos, commonmark_cache etc are skipped.
-                        // We need to ensure they are valid defaults if serde didn't fill them?
-                        // Actually serde default logic handles missing fields if configured,
-                        // but for `Option` it might be None.
-                        // Let's just return it and let the `unwrap_or_else` block logic (which we don't have here)
-                        // Wait, we need to return Option<Self>
-                        Some(app)
-                    }
-                    Err(_) => None,
-                }
+                serde_json::from_reader(reader).ok()
             } else {
                 None
             }
@@ -661,7 +647,7 @@ impl TodoApp {
                         // Initialize the text field for this project if it doesn't exist
                         self.right_click_task_text
                             .entry(project_id)
-                            .or_insert_with(String::new);
+                            .or_default();
                     }
                     "create_task" => {
                         self.add_task_to_project(project_id, text);
