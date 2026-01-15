@@ -692,11 +692,22 @@ impl TodoApp {
                 egui::Sense::click_and_drag(),
             );
 
+            // Pan with middle mouse button
             if canvas_response.dragged_by(egui::PointerButton::Middle) {
                 self.notes_canvas.scene_rect = self
                     .notes_canvas
                     .scene_rect
                     .translate(canvas_response.drag_delta());
+            }
+
+            // Pan with two-finger trackpad drag
+            // translation_delta() provides panning from scrolling or pan gestures
+            let pan_delta = ui.input(|i| i.translation_delta());
+            if pan_delta != egui::Vec2::ZERO {
+                self.notes_canvas.scene_rect = self
+                    .notes_canvas
+                    .scene_rect
+                    .translate(pan_delta);
             }
 
             // Render background with pan offset

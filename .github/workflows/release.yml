@@ -61,7 +61,7 @@ jobs:
           Type=Application
           Name=Todo App
           Exec=todo_app
-          Icon=todo_app
+          Icon=icon
           Categories=Utility;
           EOF
           
