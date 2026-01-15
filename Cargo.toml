@@ -3,6 +3,7 @@ name = "todo_app"
 version = "2.5.1"
 edition = "2021"
 license = "MIT"
+authors = ["thearpankumar <arpankumar1119@outlook.com>"]
 description = "A small todo app built with eframe / egui."
 
 [package.metadata.generate-rpm]

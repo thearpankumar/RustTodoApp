@@ -53,15 +53,9 @@ jobs:
       - name: Build (Release)
         run: cargo build --release
 
-      - name: Create .deb
+      - name: Prepare Assets (Linux)
         run: |
-          cargo deb -p todo_app
-          mkdir -p release_artifacts
-          cp target/debian/*.deb release_artifacts/
-
-      - name: Create .rpm
-        run: |
-          # Prepare assets for RPM
+          # Create .desktop file (Needed for AppImage, DEB and RPM)
           cat > todo_app.desktop <<EOF
           [Desktop Entry]
           Type=Application
@@ -70,8 +64,18 @@ jobs:
           Icon=todo_app
           Categories=Utility;
           EOF
-          cp assets/icon.png todo_app.png
           
+          # Prepare Icon
+          cp assets/icon.png todo_app.png
+
+      - name: Create .deb
+        run: |
+          cargo deb -p todo_app
+          mkdir -p release_artifacts
+          cp target/debian/*.deb release_artifacts/
+
+      - name: Create .rpm
+        run: |
           cargo generate-rpm -p todo_app
           cp target/generate-rpm/*.rpm release_artifacts/
 
@@ -144,7 +148,7 @@ jobs:
           # Initialize wix for the specific package
           cargo wix init -p todo_app
           # Build MSI for the specific package with the icon
-          cargo wix -p todo_app --icon assets/icon.ico
+          cargo wix -p todo_app --product-icon assets/icon.ico
           
           # Move MSI to artifacts
           $out = "release_artifacts"
