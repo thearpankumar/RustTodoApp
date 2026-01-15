@@ -77,6 +77,7 @@ jobs:
       - name: Create .rpm
         run: |
           cargo generate-rpm
+          mkdir -p release_artifacts
           cp target/generate-rpm/*.rpm release_artifacts/
 
       - name: Create AppImage
@@ -92,7 +93,7 @@ jobs:
           cp assets/icon.png AppDir/
           
           # Run linuxdeploy
-          ./linuxdeploy --appdir AppDir --output appimage --icon-file todo_app.png --desktop-file todo_app.desktop
+          ./linuxdeploy --appdir AppDir --output appimage --icon-file assets/icon.png --desktop-file todo_app.desktop
           
           # Move artifact
           mv Todo_App-*.AppImage release_artifacts/todo_app-${{ github.ref_name }}-x86_64.AppImage
