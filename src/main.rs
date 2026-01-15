@@ -132,9 +132,7 @@ impl Default for TodoApp {
 impl TodoApp {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
         // Load data from storage if available
-        if let Some(storage) = cc.storage {
-            return eframe::get_value(storage, "todo_app_data").unwrap_or_default();
-        }
+
         // Customize fonts
 
         // --- Persistence Loading Strategy ---
@@ -847,53 +845,79 @@ impl TodoApp {
                 }
 
                 // Header with title and delete button
-                let header_res = ui.horizontal(|ui| {
-                    // Check if this title is being edited
-                    if self.editing_title == Some(textbox_id) {
-                        let response = ui.text_edit_singleline(&mut self.temp_title_text);
-                        if response.lost_focus() {
-                            if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                                actions.push(("save_title", textbox_id));
-                            } else if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                                actions.push(("cancel_title_edit", textbox_id));
-                            }
-                        }
-                    } else {
-                        let title_response = ui.add(
-                            egui::Label::new(
-                                egui::RichText::new(&text_box.title)
-                                    .strong()
-                                    .size(16.0)
-                                    .color(egui::Color32::from_gray(200)),
-                            )
-                            .sense(egui::Sense::click()),
-                        );
-                        if title_response.double_clicked() {
-                            actions.push(("edit_title", textbox_id));
-                        }
-                    }
-
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .button(egui::RichText::new(icons::icons::ICON_DELETE).size(14.0))
-                            .clicked()
-                        {
-                            actions.push(("delete", textbox_id));
-                        }
-                    });
-                });
-
-                // Make the header interactive for dragging (Left Mouse Only)
-                // We interact with the rect of the header.
-                let header_response = ui.interact(
-                    header_res.response.rect,
-                    id.with("header_drag"),
-                    egui::Sense::drag(),
-                );
+                // Use a Right-to-Left layout to position the delete button first (on the right)
+                // Then use the remaining space for the Title, making it the drag handle.
                 let mut delta = egui::Vec2::ZERO;
-                if header_response.dragged_by(egui::PointerButton::Primary) {
-                    delta = header_response.drag_delta();
-                }
+
+                // Allocate a fixed height strip for the header so it doesn't float in the middle
+                // of the box due to Align::Center
+                let header_height = 30.0;
+                let header_rect = ui
+                    .allocate_exact_size(
+                        egui::vec2(ui.available_width(), header_height),
+                        egui::Sense::hover(),
+                    )
+                    .0;
+
+                ui.scope_builder(
+                    egui::UiBuilder::new()
+                        .max_rect(header_rect)
+                        .layout(egui::Layout::top_down(egui::Align::Min)),
+                    |ui| {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            // 1. Delete Button (Right aligned)
+                            if ui
+                                .button(egui::RichText::new(icons::icons::ICON_DELETE).size(14.0))
+                                .clicked()
+                            {
+                                actions.push(("delete", textbox_id));
+                            }
+
+                            // 2. Title (Fills remaining space to the left)
+                            ui.with_layout(
+                                egui::Layout::left_to_right(egui::Align::Center),
+                                |ui| {
+                                    // Check if this title is being edited
+                                    if self.editing_title == Some(textbox_id) {
+                                        let response = ui.add_sized(
+                                            egui::vec2(ui.available_width(), 24.0),
+                                            egui::TextEdit::singleline(&mut self.temp_title_text),
+                                        );
+
+                                        if response.lost_focus() {
+                                            if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                                                actions.push(("save_title", textbox_id));
+                                            } else if ui.input(|i| i.key_pressed(egui::Key::Escape))
+                                            {
+                                                actions.push(("cancel_title_edit", textbox_id));
+                                            }
+                                        }
+                                    } else {
+                                        // Display Title - Make it draggable and double-clickable
+                                        let title_response = ui.add_sized(
+                                            egui::vec2(ui.available_width(), 24.0),
+                                            egui::Label::new(
+                                                egui::RichText::new(&text_box.title)
+                                                    .strong()
+                                                    .size(16.0)
+                                                    .color(egui::Color32::from_gray(200)),
+                                            )
+                                            .sense(egui::Sense::click_and_drag()),
+                                        );
+
+                                        if title_response.double_clicked() {
+                                            actions.push(("edit_title", textbox_id));
+                                        }
+
+                                        if title_response.dragged_by(egui::PointerButton::Primary) {
+                                            delta = title_response.drag_delta();
+                                        }
+                                    }
+                                },
+                            );
+                        });
+                    },
+                );
 
                 ui.separator();
 
