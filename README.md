@@ -1,10 +1,11 @@
-<h1 align="center" style="color:red" > RUST::TODO:APP </h1>
+<h1 align="center" style="color:red" > RUST::TODO<&APP> </h1>
 
 ---
 <h4 align="center"> This is all your todo app should do. </h4>
 
 ![App Screenshot](assets/app_ss3.png)
 
+![App Screenshot](assets/app_ss4.png) 
 ## Installation & Usage
 
 ### Building and Installing
