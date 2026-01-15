@@ -2,6 +2,14 @@
 name = "todo_app"
 version = "2.5.0"
 edition = "2021"
+license = "MIT"
+
+[package.metadata.generate-rpm]
+assets = [
+    { source = "target/release/todo_app", dest = "/usr/bin/todo_app", mode = "755" },
+    { source = "assets/app_ss3.png", dest = "/usr/share/pixmaps/todo_app.png", mode = "644" },
+    { source = "todo_app.desktop", dest = "/usr/share/applications/todo_app.desktop", mode = "644" }
+]
 
 [dependencies]
 eframe = { version = "0.33.3", features = ["persistence"] }
