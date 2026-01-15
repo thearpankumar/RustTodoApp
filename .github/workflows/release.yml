@@ -55,7 +55,7 @@ jobs:
 
       - name: Create .deb
         run: |
-          cargo deb
+          cargo deb -p todo_app
           mkdir -p release_artifacts
           cp target/debian/*.deb release_artifacts/
 
@@ -72,7 +72,7 @@ jobs:
           EOF
           cp assets/app_ss3.png todo_app.png
           
-          cargo generate-rpm
+          cargo generate-rpm -p todo_app
           cp target/generate-rpm/*.rpm release_artifacts/
 
       - name: Create AppImage
@@ -141,10 +141,10 @@ jobs:
         shell: pwsh
         run: |
           cargo install cargo-wix
-          # Initialize wix without --nocapture (defaults)
-          cargo wix init
-          # Build MSI without --nocapture
-          cargo wix
+          # Initialize wix for the specific package
+          cargo wix init -p todo_app
+          # Build MSI for the specific package
+          cargo wix -p todo_app
           
           # Move MSI to artifacts
           $out = "release_artifacts"
