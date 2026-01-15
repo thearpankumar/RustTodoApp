@@ -645,9 +645,7 @@ impl TodoApp {
                     "add_task" => {
                         self.adding_task_to_project = Some(project_id);
                         // Initialize the text field for this project if it doesn't exist
-                        self.right_click_task_text
-                            .entry(project_id)
-                            .or_default();
+                        self.right_click_task_text.entry(project_id).or_default();
                     }
                     "create_task" => {
                         self.add_task_to_project(project_id, text);
