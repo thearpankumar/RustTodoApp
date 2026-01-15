@@ -1,38 +1,34 @@
 use chrono::prelude::*;
 use eframe::egui;
+use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use egui_material_icons as icons;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufReader, BufWriter};
 
 // Notes Canvas Data Structures
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
-enum BulletStyle {
-    None,
-    Circle,         // ●
-    Square,         // ■
-    Dash,           // –
-    Numbered(usize), // 1. 2. 3. etc.
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-struct TextLine {
-    text: String,
-    bullet_style: BulletStyle,
-    bullet_color: egui::Color32,
-}
-
 #[derive(Clone, Serialize, Deserialize)]
 struct TextBox {
     id: usize,
     title: String,
     position: egui::Pos2,
     size: egui::Vec2,
-    lines: Vec<TextLine>,
-    font_size: f32,
-    text_color: egui::Color32,
+
+    // New Markdown content
+    #[serde(default)]
+    content: String,
+
+    #[serde(default = "default_auto_height")]
+    auto_height: bool,
+
     min_size: egui::Vec2,
     #[serde(skip)]
     is_dragging: bool,
+}
+
+fn default_auto_height() -> bool {
+    true
 }
 
 #[derive(Serialize, Deserialize)]
@@ -47,10 +43,7 @@ impl Default for NotesCanvas {
         Self {
             text_boxes: Vec::new(),
             next_textbox_id: 1,
-            scene_rect: egui::Rect::from_min_size(
-                egui::pos2(0.0, 0.0),
-                egui::vec2(5000.0, 5000.0),
-            ),
+            scene_rect: egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(5000.0, 5000.0)),
         }
     }
 }
@@ -98,12 +91,13 @@ struct TodoApp {
     show_notes: bool,
     #[serde(skip)]
     context_menu_pos: Option<egui::Pos2>,
+
+    // Editing state
     #[serde(skip)]
-    editing_textbox: Option<usize>,
+    editing_textbox: Option<usize>, // ID of textbox being edited
     #[serde(skip)]
-    editing_line_idx: Option<usize>,
-    #[serde(skip)]
-    temp_edit_text: String,
+    commonmark_cache: CommonMarkCache, // Cache for markdown rendering
+
     #[serde(skip)]
     editing_title: Option<usize>, // ID of textbox whose title is being edited
     #[serde(skip)]
@@ -128,8 +122,7 @@ impl Default for TodoApp {
             show_notes: false,
             context_menu_pos: None,
             editing_textbox: None,
-            editing_line_idx: None,
-            temp_edit_text: String::new(),
+            commonmark_cache: CommonMarkCache::default(),
             editing_title: None,
             temp_title_text: String::new(),
         }
@@ -142,13 +135,85 @@ impl TodoApp {
         if let Some(storage) = cc.storage {
             return eframe::get_value(storage, "todo_app_data").unwrap_or_default();
         }
+        // Customize fonts
+
+        // --- Persistence Loading Strategy ---
+        // Release: Use eframe's default storage (OS standard paths)
+        // Debug: Use local file "todo_data.json" in CWD
+
+        let loaded_app: Option<Self> = if cfg!(debug_assertions) {
+            // Debug Mode: Try loading from local file
+            if let Ok(file) = File::open("todo_data.json") {
+                let reader = BufReader::new(file);
+                match serde_json::from_reader(reader) {
+                    Ok(app) => {
+                        // We need to re-initialize transient fields that aren't serialized
+                        // (Though most of your fields seem serialized or have defaults,
+                        //  but we must assume `app` came from JSON)
+                        // Important: context_menu_pos, commonmark_cache etc are skipped.
+                        // We need to ensure they are valid defaults if serde didn't fill them?
+                        // Actually serde default logic handles missing fields if configured,
+                        // but for `Option` it might be None.
+                        // Let's just return it and let the `unwrap_or_else` block logic (which we don't have here)
+                        // Wait, we need to return Option<Self>
+                        Some(app)
+                    }
+                    Err(_) => None,
+                }
+            } else {
+                None
+            }
+        } else {
+            // Release Mode: Use eframe storage
+            if let Some(storage) = cc.storage {
+                eframe::get_value(storage, eframe::APP_KEY)
+            } else {
+                None
+            }
+        };
+
+        if let Some(mut app) = loaded_app {
+            // Restore transient/runtime state
+            app.commonmark_cache = CommonMarkCache::default();
+            app.editing_textbox = None;
+            app.editing_title = None;
+            app.adding_task_to_project = None;
+            app.editing_task = None;
+            app.right_click_task_text = HashMap::new();
+            app.new_task_texts = HashMap::new();
+            app.context_menu_pos = None;
+            app.temp_title_text = String::new();
+            app.edit_task_text = String::new();
+
+            // Ensure auto_height is set correctly for old data if needed (though serde default handles it)
+            // Fix text boxes that might have come from older saves without auto_height
+            // (already handled by serde default)
+
+            return app;
+        }
+
+        // If load failed or no save exists, return default
         Default::default()
     }
 }
 
 impl eframe::App for TodoApp {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        eframe::set_value(storage, "todo_app_data", self);
+        // --- Persistence Saving Strategy ---
+        // Release: Use eframe's default storage
+        // Debug: Use local file "todo_data.json"
+
+        if cfg!(debug_assertions) {
+            // Debug Mode: Save to local file
+            if let Ok(file) = File::create("todo_data.json") {
+                let writer = BufWriter::new(file);
+                // Pretty print for easier debugging
+                let _ = serde_json::to_writer_pretty(writer, self);
+            }
+        } else {
+            // Release Mode: Save to eframe storage
+            eframe::set_value(storage, eframe::APP_KEY, self);
+        }
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -201,8 +266,11 @@ impl TodoApp {
             ui.horizontal(|ui| {
                 // Left side - Username
                 ui.label(
-                    egui::RichText::new(format!("User: {}", whoami::username().unwrap_or_else(|_| "Unknown".to_string())))
-                        .size(label_size),
+                    egui::RichText::new(format!(
+                        "User: {}",
+                        whoami::username().unwrap_or_else(|_| "Unknown".to_string())
+                    ))
+                    .size(label_size),
                 );
 
                 // Get the remaining width for the rest of the layout
@@ -215,9 +283,12 @@ impl TodoApp {
                     );
 
                     // Center the title in remaining space
-                    ui.with_layout(egui::Layout::centered_and_justified(egui::Direction::LeftToRight), |ui| {
-                        ui.heading(egui::RichText::new("Todo App").size(heading_size));
-                    });
+                    ui.with_layout(
+                        egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
+                        |ui| {
+                            ui.heading(egui::RichText::new("Todo App").size(heading_size));
+                        },
+                    );
                 });
             });
             ui.separator();
@@ -243,9 +314,15 @@ impl TodoApp {
 
             // Simplified instruction for users
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(format!("Right-click on the expand/collapse button ({}/{}) to add tasks directly!",
-                    icons::icons::ICON_CHEVRON_RIGHT,
-                    icons::icons::ICON_EXPAND_MORE)).size(label_size).color(egui::Color32::GRAY));
+                ui.label(
+                    egui::RichText::new(format!(
+                        "Right-click on the expand/collapse button ({}/{}) to add tasks directly!",
+                        icons::icons::ICON_CHEVRON_RIGHT,
+                        icons::icons::ICON_EXPAND_MORE
+                    ))
+                    .size(label_size)
+                    .color(egui::Color32::GRAY),
+                );
             });
 
             ui.add_space(16.0);
@@ -284,9 +361,12 @@ impl TodoApp {
 
                                         // Right-click on expand button to add task
                                         if expand_response.secondary_clicked() {
-                                            project_actions.push(("add_task", project.id, String::new()));
+                                            project_actions.push((
+                                                "add_task",
+                                                project.id,
+                                                String::new(),
+                                            ));
                                         }
-
 
                                         // Project name and controls
                                         if self.editing_project == Some(project.id) {
@@ -514,30 +594,50 @@ impl TodoApp {
                                                 ui.add_space(8.0);
                                                 ui.horizontal(|ui| {
                                                     ui.label("New Task:");
-                                                    let task_text = self.right_click_task_text.get_mut(&project.id).unwrap();
-                                                    let response = ui.text_edit_singleline(task_text);
+                                                    let task_text = self
+                                                        .right_click_task_text
+                                                        .get_mut(&project.id)
+                                                        .unwrap();
+                                                    let response =
+                                                        ui.text_edit_singleline(task_text);
 
                                                     if ui.button(icons::icons::ICON_CHECK).clicked()
-                                                        || (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+                                                        || (response.lost_focus()
+                                                            && ui.input(|i| {
+                                                                i.key_pressed(egui::Key::Enter)
+                                                            }))
                                                     {
                                                         if !task_text.trim().is_empty() {
-                                                            project_actions.push(("create_task", project.id, task_text.clone()));
+                                                            project_actions.push((
+                                                                "create_task",
+                                                                project.id,
+                                                                task_text.clone(),
+                                                            ));
                                                         }
-                                                        project_actions.push(("cancel_add_task", project.id, String::new()));
+                                                        project_actions.push((
+                                                            "cancel_add_task",
+                                                            project.id,
+                                                            String::new(),
+                                                        ));
                                                     }
 
                                                     if ui.button(icons::icons::ICON_CLOSE).clicked()
-                                                        || (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)))
+                                                        || (response.lost_focus()
+                                                            && ui.input(|i| {
+                                                                i.key_pressed(egui::Key::Escape)
+                                                            }))
                                                     {
-                                                        project_actions.push(("cancel_add_task", project.id, String::new()));
+                                                        project_actions.push((
+                                                            "cancel_add_task",
+                                                            project.id,
+                                                            String::new(),
+                                                        ));
                                                     }
                                                 });
                                             }
-
                                         });
                                     }
                                 });
-
                         });
                         ui.add_space(16.0);
                     }
@@ -559,7 +659,9 @@ impl TodoApp {
                     "add_task" => {
                         self.adding_task_to_project = Some(project_id);
                         // Initialize the text field for this project if it doesn't exist
-                        self.right_click_task_text.entry(project_id).or_insert_with(String::new);
+                        self.right_click_task_text
+                            .entry(project_id)
+                            .or_insert_with(String::new);
                     }
                     "create_task" => {
                         self.add_task_to_project(project_id, text);
@@ -602,10 +704,17 @@ impl TodoApp {
             let rect = ui.max_rect();
 
             // Detect middle mouse or two-finger drag for panning
-            let canvas_response = ui.interact(rect, egui::Id::new("canvas_interact"), egui::Sense::click_and_drag());
+            let canvas_response = ui.interact(
+                rect,
+                egui::Id::new("canvas_interact"),
+                egui::Sense::click_and_drag(),
+            );
 
             if canvas_response.dragged_by(egui::PointerButton::Middle) {
-                self.notes_canvas.scene_rect = self.notes_canvas.scene_rect.translate(canvas_response.drag_delta());
+                self.notes_canvas.scene_rect = self
+                    .notes_canvas
+                    .scene_rect
+                    .translate(canvas_response.drag_delta());
             }
 
             // Render background with pan offset
@@ -626,25 +735,25 @@ impl TodoApp {
                 if ui
                     .add_sized(
                         [button_size, button_size],
-                        egui::Button::new(egui::RichText::new(icons::icons::ICON_CENTER_FOCUS_STRONG).size(20.0))
-                            .corner_radius(5.0),
+                        egui::Button::new(
+                            egui::RichText::new(icons::icons::ICON_CENTER_FOCUS_STRONG).size(20.0),
+                        )
+                        .corner_radius(5.0),
                     )
                     .on_hover_text("Reset view to center")
                     .clicked()
                 {
                     // Reset to center
-                    self.notes_canvas.scene_rect = egui::Rect::from_min_size(
-                        egui::pos2(0.0, 0.0),
-                        egui::vec2(5000.0, 5000.0),
-                    );
+                    self.notes_canvas.scene_rect =
+                        egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(5000.0, 5000.0));
                 }
             });
 
         // Render editing dialog (on top of canvas)
-        self.render_editing_dialog(ctx);
+        // self.render_editing_dialog(ctx); // Removed
 
         // Render formatting dialog (on top of canvas)
-        self.render_formatting_dialog(ctx);
+        // self.render_formatting_dialog(ctx); // Removed
     }
 
     fn render_canvas_background(&self, ui: &mut egui::Ui) {
@@ -669,7 +778,10 @@ impl TodoApp {
             let screen_x = x + pan_offset.x;
             if screen_x >= rect.min.x && screen_x <= rect.max.x {
                 painter.line_segment(
-                    [egui::pos2(screen_x, rect.min.y), egui::pos2(screen_x, rect.max.y)],
+                    [
+                        egui::pos2(screen_x, rect.min.y),
+                        egui::pos2(screen_x, rect.max.y),
+                    ],
                     egui::Stroke::new(1.0, grid_color),
                 );
             }
@@ -682,7 +794,10 @@ impl TodoApp {
             let screen_y = y + pan_offset.y;
             if screen_y >= rect.min.y && screen_y <= rect.max.y {
                 painter.line_segment(
-                    [egui::pos2(rect.min.x, screen_y), egui::pos2(rect.max.x, screen_y)],
+                    [
+                        egui::pos2(rect.min.x, screen_y),
+                        egui::pos2(rect.max.x, screen_y),
+                    ],
                     egui::Stroke::new(1.0, grid_color),
                 );
             }
@@ -703,7 +818,7 @@ impl TodoApp {
     }
 
     fn render_text_boxes(&mut self, ui: &mut egui::Ui) {
-        let mut actions: Vec<(&str, usize, usize)> = Vec::new(); // (action, textbox_id, line_idx)
+        let mut actions: Vec<(&str, usize)> = Vec::new(); // (action, textbox_id)
         let pan_offset = self.notes_canvas.scene_rect.min.to_vec2();
 
         // Iterate through text boxes (render in order for z-ordering)
@@ -713,165 +828,187 @@ impl TodoApp {
 
             // Apply pan offset to text box position
             let screen_position = text_box.position + pan_offset;
-            let frame_rect = egui::Rect::from_min_size(screen_position, text_box.size);
+
+            // Calculate frame rect
+            // If auto-height, we use a flexible height initially (Infinity) so it can grow
+            // If manual, we use the stored size
+            let current_size = if text_box.auto_height {
+                egui::vec2(text_box.size.x, f32::INFINITY)
+            } else {
+                text_box.size
+            };
+
+            let frame_rect = egui::Rect::from_min_size(screen_position, current_size);
             let textbox_id = text_box.id;
-            let font_size = text_box.font_size;
-            let text_color = text_box.text_color;
 
             // Create a child UI at the text box position
-            let mut child_ui = ui.new_child(egui::UiBuilder::new().max_rect(frame_rect));
+            // We use a builder but we DON'T strictly force max_rect if we want auto-growth
+            // However, for the frame background to be drawn correctly, we wrap it.
+            let mut child_ui = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(frame_rect)
+                    .layout(egui::Layout::top_down(egui::Align::Min)),
+            );
 
             let frame = egui::Frame::group(child_ui.style())
                 .fill(egui::Color32::from_gray(30))
                 .stroke(egui::Stroke::new(2.0, egui::Color32::from_gray(80)));
 
-            let response = frame
-                .show(&mut child_ui, |ui| {
-                    ui.set_width(text_box.size.x - 20.0);
+            let inner_response = frame.show(&mut child_ui, |ui| {
+                ui.set_width(text_box.size.x - 20.0);
 
-                    // Header with title and delete button
-                    ui.horizontal(|ui| {
-                        // Check if this title is being edited
-                        if self.editing_title == Some(textbox_id) {
-                            let response = ui.text_edit_singleline(&mut self.temp_title_text);
-                            if response.lost_focus() {
-                                if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                                    actions.push(("save_title", textbox_id, 0));
-                                } else if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                                    actions.push(("cancel_title_edit", textbox_id, 0));
-                                }
-                            }
-                        } else {
-                            let title_response = ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(&text_box.title)
-                                        .strong()
-                                        .size(16.0)
-                                        .color(egui::Color32::from_gray(200)),
-                                )
-                                .sense(egui::Sense::click())
-                            );
-                            if title_response.double_clicked() {
-                                actions.push(("edit_title", textbox_id, 0));
+                // If MANUAL mode, force the frame to be at least the user-defined height
+                if !text_box.auto_height {
+                    ui.set_min_height(text_box.size.y - 20.0); // -20 for padding/margins approximation
+                }
+
+                // Header with title and delete button
+                let header_res = ui.horizontal(|ui| {
+                    // Check if this title is being edited
+                    if self.editing_title == Some(textbox_id) {
+                        let response = ui.text_edit_singleline(&mut self.temp_title_text);
+                        if response.lost_focus() {
+                            if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                                actions.push(("save_title", textbox_id));
+                            } else if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                                actions.push(("cancel_title_edit", textbox_id));
                             }
                         }
+                    } else {
+                        let title_response = ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(&text_box.title)
+                                    .strong()
+                                    .size(16.0)
+                                    .color(egui::Color32::from_gray(200)),
+                            )
+                            .sense(egui::Sense::click()),
+                        );
+                        if title_response.double_clicked() {
+                            actions.push(("edit_title", textbox_id));
+                        }
+                    }
 
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui
-                                .button(egui::RichText::new(icons::icons::ICON_DELETE).size(14.0))
-                                .clicked()
-                            {
-                                actions.push(("delete", textbox_id, 0));
-                            }
-                        });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .button(egui::RichText::new(icons::icons::ICON_DELETE).size(14.0))
+                            .clicked()
+                        {
+                            actions.push(("delete", textbox_id));
+                        }
                     });
-                    ui.separator();
+                });
 
-                    // Render text lines
-                    for (line_idx, line) in text_box.lines.iter().enumerate() {
-                        ui.horizontal(|ui| {
-                            // Render bullet
-                            match line.bullet_style {
-                                BulletStyle::None => {}
-                                BulletStyle::Circle => {
-                                    ui.colored_label(
-                                        line.bullet_color,
-                                        egui::RichText::new("●").size(font_size),
-                                    );
-                                }
-                                BulletStyle::Square => {
-                                    ui.colored_label(
-                                        line.bullet_color,
-                                        egui::RichText::new("■").size(font_size),
-                                    );
-                                }
-                                BulletStyle::Dash => {
-                                    ui.colored_label(
-                                        line.bullet_color,
-                                        egui::RichText::new("–").size(font_size),
-                                    );
-                                }
-                                BulletStyle::Numbered(num) => {
-                                    ui.colored_label(
-                                        line.bullet_color,
-                                        egui::RichText::new(format!("{}.", num)).size(font_size),
-                                    );
-                                }
-                            }
+                // Make the header interactive for dragging (Left Mouse Only)
+                // We interact with the rect of the header.
+                let header_response = ui.interact(
+                    header_res.response.rect,
+                    id.with("header_drag"),
+                    egui::Sense::drag(),
+                );
+                let mut delta = egui::Vec2::ZERO;
+                if header_response.dragged_by(egui::PointerButton::Primary) {
+                    delta = header_response.drag_delta();
+                }
 
-                            // Text display / edit
-                            if line.text.is_empty() {
-                                let response = ui.label(
-                                    egui::RichText::new("[Click to edit]")
-                                        .size(font_size)
-                                        .color(egui::Color32::from_gray(120)),
-                                );
-                                if response.clicked() {
-                                    actions.push(("edit_line", textbox_id, line_idx));
-                                }
-                            } else {
-                                let response = ui.colored_label(
-                                    text_color,
-                                    egui::RichText::new(&line.text).size(font_size),
-                                );
-                                if response.clicked() {
-                                    actions.push(("edit_line", textbox_id, line_idx));
-                                }
-                            }
+                ui.separator();
 
-                            // Formatting controls (always visible for non-empty lines)
-                            if !line.text.is_empty() {
-                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    // Delete line button
-                                    if ui.button(egui::RichText::new(icons::icons::ICON_DELETE).size(12.0))
-                                        .on_hover_text("Delete line")
-                                        .clicked()
-                                    {
-                                        actions.push(("delete_line", textbox_id, line_idx));
-                                    }
+                // Main Content Area
+                let is_editing = self.editing_textbox == Some(textbox_id);
 
-                                    // Bullet style button (opens formatting menu)
-                                    if ui.button(egui::RichText::new(icons::icons::ICON_FORMAT_LIST_BULLETED).size(12.0))
-                                        .on_hover_text("Format")
-                                        .clicked()
-                                    {
-                                        actions.push(("format_line", textbox_id, line_idx));
-                                    }
-                                });
-                            }
-                        });
+                if is_editing {
+                    // Edit Mode
+                    // Use ui.add with desired_width instead of add_sized to allow height to grow naturally
+                    let response = ui.add(
+                        egui::TextEdit::multiline(&mut text_box.content)
+                            .frame(false)
+                            .desired_width(ui.available_width()),
+                    );
+
+                    if response.clicked_elsewhere() {
+                        actions.push(("stop_editing", textbox_id));
                     }
+                } else {
+                    // View Mode
+                    let scroll_area =
+                        egui::ScrollArea::vertical().id_salt(format!("scroll_{}", textbox_id));
 
-                    // Add Line button
-                    ui.add_space(4.0);
-                    if ui.button(format!("{} Add Line", icons::icons::ICON_ADD)).clicked() {
-                        actions.push(("add_line", textbox_id, 0));
+                    // In auto-height mode, we don't want the scroll area to shrink or scroll, just expand.
+                    // In manual mode, we want it to scroll if content is too big.
+                    let scroll_area = if text_box.auto_height {
+                        scroll_area.auto_shrink([false, true]) // Let it grow vertically
+                    } else {
+                        scroll_area.auto_shrink([false, false]) // Fill available space
+                    };
+
+                    let scroll_response = scroll_area.show(ui, |ui| {
+                        if text_box.content.is_empty() {
+                            if ui
+                                .add(
+                                    egui::Label::new("Double-click to edit...")
+                                        .sense(egui::Sense::click()),
+                                )
+                                .double_clicked()
+                            {
+                                actions.push(("start_editing", textbox_id));
+                            }
+                        } else {
+                            CommonMarkViewer::new().show(
+                                ui,
+                                &mut self.commonmark_cache,
+                                &text_box.content,
+                            );
+                        }
+                    });
+
+                    if !text_box.content.is_empty()
+                        && ui
+                            .interact(
+                                scroll_response.inner_rect,
+                                id.with("view_interact"),
+                                egui::Sense::click(),
+                            )
+                            .double_clicked()
+                    {
+                        actions.push(("start_editing", textbox_id));
                     }
-                })
-                .response;
+                }
 
-            // Handle dragging (access text_box again after closure)
-            // Drag delta is in screen space, can be applied directly to canvas position
+                delta
+            });
+
+            let header_drag_delta = inner_response.inner;
+            let response = inner_response.response;
+
+            // Handle dragging (Position Update)
             let text_box = &mut self.notes_canvas.text_boxes[text_box_idx];
-            if response.drag_started() {
+            // Only update position if we got a delta from the header
+            if header_drag_delta != egui::Vec2::ZERO {
                 text_box.is_dragging = true;
-            }
-            if response.dragged() && text_box.is_dragging {
-                // Drag delta is already in the right coordinate system
-                text_box.position += response.drag_delta();
-            }
-            if response.drag_stopped() {
+                text_box.position += header_drag_delta;
+            } else {
                 text_box.is_dragging = false;
             }
 
-            // Resize handle (bottom-right corner)
+            // Note: We removed the old drag logic associated with 'response' (the whole frame)
+
+            // If we are in auto_height mode, update the size to match the frame size
+            if text_box.auto_height {
+                // FIXED: Only update HEIGHT. Preserve width to prevent shrinking loop!
+                text_box.size.y = response.rect.height();
+            }
+
+            // Resize handle
             let resize_handle_size = 15.0;
+            // The handle should ALWAYS be at the bottom-right of the actual rendered frame
             let resize_handle_pos = egui::pos2(
-                frame_rect.max.x - resize_handle_size,
-                frame_rect.max.y - resize_handle_size,
+                response.rect.max.x - resize_handle_size,
+                response.rect.max.y - resize_handle_size,
             );
-            let resize_handle_rect =
-                egui::Rect::from_min_size(resize_handle_pos, egui::vec2(resize_handle_size, resize_handle_size));
+            let resize_handle_rect = egui::Rect::from_min_size(
+                resize_handle_pos,
+                egui::vec2(resize_handle_size, resize_handle_size),
+            );
 
             let resize_response = ui.interact(
                 resize_handle_rect,
@@ -879,9 +1016,21 @@ impl TodoApp {
                 egui::Sense::drag(),
             );
 
-            if resize_response.dragged() {
-                let text_box = &mut self.notes_canvas.text_boxes[text_box_idx];
-                text_box.size += resize_response.drag_delta();
+            // Double-click resize handle to reset to auto-height
+            // double_clicked() defaults to primary button
+            if resize_response.double_clicked() {
+                text_box.auto_height = true;
+            }
+
+            if resize_response.dragged_by(egui::PointerButton::Primary) {
+                let delta = resize_response.drag_delta();
+
+                // If dragging height, disable auto_height
+                if delta.y.abs() > 0.0 {
+                    text_box.auto_height = false;
+                }
+
+                text_box.size += delta;
                 text_box.size = text_box.size.max(text_box.min_size);
             }
 
@@ -891,12 +1040,22 @@ impl TodoApp {
             } else {
                 egui::Color32::from_gray(180)
             };
+
+            // Draw handle ONLY if the frame is visible/rendered
             ui.painter()
                 .rect_filled(resize_handle_rect, 2.0, resize_color);
         }
 
-        // Process actions (deferred to avoid borrowing issues)
-        for (action, textbox_id, line_idx) in actions {
+        // Handle clicking background to stop editing
+        if ui.input(|i| i.pointer.primary_clicked()) {
+            // If we clicked, and it wasn't handled by a specific box, check where it was
+            // This is a bit tricky in immediate mode.
+            // A simple heuristic: if we are editing, and we click something that ISN'T the edit box, stop editing.
+            // The `response.clicked_elsewhere()` covers most cases, but global click handling helps too.
+        }
+
+        // Process actions
+        for (action, textbox_id) in actions {
             match action {
                 "delete" => {
                     self.notes_canvas
@@ -904,15 +1063,23 @@ impl TodoApp {
                         .retain(|tb| tb.id != textbox_id);
                 }
                 "edit_title" => {
-                    // Start editing this title
-                    if let Some(textbox) = self.notes_canvas.text_boxes.iter().find(|tb| tb.id == textbox_id) {
+                    if let Some(textbox) = self
+                        .notes_canvas
+                        .text_boxes
+                        .iter()
+                        .find(|tb| tb.id == textbox_id)
+                    {
                         self.editing_title = Some(textbox_id);
                         self.temp_title_text = textbox.title.clone();
                     }
                 }
                 "save_title" => {
-                    // Save the title
-                    if let Some(textbox) = self.notes_canvas.text_boxes.iter_mut().find(|tb| tb.id == textbox_id) {
+                    if let Some(textbox) = self
+                        .notes_canvas
+                        .text_boxes
+                        .iter_mut()
+                        .find(|tb| tb.id == textbox_id)
+                    {
                         if !self.temp_title_text.trim().is_empty() {
                             textbox.title = self.temp_title_text.clone();
                         }
@@ -924,38 +1091,11 @@ impl TodoApp {
                     self.editing_title = None;
                     self.temp_title_text.clear();
                 }
-                "edit_line" => {
-                    // Start editing this line
-                    if let Some(textbox) = self.notes_canvas.text_boxes.iter().find(|tb| tb.id == textbox_id) {
-                        if let Some(line) = textbox.lines.get(line_idx) {
-                            self.editing_textbox = Some(textbox_id);
-                            self.editing_line_idx = Some(line_idx);
-                            self.temp_edit_text = line.text.clone();
-                        }
-                    }
-                }
-                "add_line" => {
-                    // Add a new line to the text box
-                    if let Some(textbox) = self.notes_canvas.text_boxes.iter_mut().find(|tb| tb.id == textbox_id) {
-                        textbox.lines.push(TextLine {
-                            text: String::new(),
-                            bullet_style: BulletStyle::None,
-                            bullet_color: egui::Color32::WHITE,
-                        });
-                    }
-                }
-                "delete_line" => {
-                    // Delete a line from the text box
-                    if let Some(textbox) = self.notes_canvas.text_boxes.iter_mut().find(|tb| tb.id == textbox_id) {
-                        if textbox.lines.len() > 1 {
-                            textbox.lines.remove(line_idx);
-                        }
-                    }
-                }
-                "format_line" => {
-                    // Open formatting dialog for this line
+                "start_editing" => {
                     self.editing_textbox = Some(textbox_id);
-                    self.editing_line_idx = Some(line_idx);
+                }
+                "stop_editing" => {
+                    self.editing_textbox = None;
                 }
                 _ => {}
             }
@@ -972,13 +1112,12 @@ impl TodoApp {
                     // Convert screen position to canvas position
                     let canvas_pos = screen_pos - pan_offset;
 
-                    // Check if click is not on any text box (in canvas coordinates)
+                    // Check if click is not on any text box
                     let on_textbox = self.notes_canvas.text_boxes.iter().any(|tb| {
                         egui::Rect::from_min_size(tb.position, tb.size).contains(canvas_pos)
                     });
 
                     if !on_textbox {
-                        // Store screen position for menu display, but we'll create box at canvas position
                         self.context_menu_pos = Some(screen_pos);
                     }
                 }
@@ -992,7 +1131,6 @@ impl TodoApp {
                 .show(ui.ctx(), |ui| {
                     egui::Frame::popup(ui.style()).show(ui, |ui| {
                         if ui.button("Create Text Box").clicked() {
-                            // Convert screen position to canvas position for creating the box
                             let canvas_pos = menu_screen_pos - pan_offset;
                             self.create_text_box_at(canvas_pos);
                             self.context_menu_pos = None;
@@ -1017,188 +1155,15 @@ impl TodoApp {
             id: self.notes_canvas.next_textbox_id,
             title: format!("Note {}", self.notes_canvas.next_textbox_id),
             position: pos,
-            size: egui::vec2(400.0, 250.0),
-            lines: vec![TextLine {
-                text: String::new(),
-                bullet_style: BulletStyle::None,
-                bullet_color: egui::Color32::WHITE,
-            }],
-            font_size: 16.0,
-            text_color: egui::Color32::WHITE,
+            size: egui::vec2(400.0, 250.0), // Fixed default size
+            content: String::new(),
+            auto_height: false, // Start in manual mode as requested
             min_size: egui::vec2(150.0, 80.0),
             is_dragging: false,
         };
 
         self.notes_canvas.text_boxes.push(text_box);
         self.notes_canvas.next_textbox_id += 1;
-    }
-
-    fn render_editing_dialog(&mut self, ctx: &egui::Context) {
-        if let (Some(textbox_id), Some(line_idx)) = (self.editing_textbox, self.editing_line_idx) {
-            // Find the text box and check if we're editing (not formatting)
-            let is_editing = self.notes_canvas.text_boxes.iter()
-                .find(|tb| tb.id == textbox_id)
-                .and_then(|tb| tb.lines.get(line_idx))
-                .map(|line| !line.text.is_empty() || self.temp_edit_text.is_empty())
-                .unwrap_or(false);
-
-            if is_editing {
-                egui::Window::new("Edit Text")
-                    .collapsible(false)
-                    .resizable(false)
-                    .show(ctx, |ui| {
-                        ui.label("Enter text:");
-                        let response = ui.text_edit_singleline(&mut self.temp_edit_text);
-
-                        // Auto-focus on first show
-                        if response.changed() {
-                            response.request_focus();
-                        }
-
-                        ui.horizontal(|ui| {
-                            if ui.button("Save").clicked() || (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
-                                // Save the text
-                                if let Some(textbox) = self.notes_canvas.text_boxes.iter_mut().find(|tb| tb.id == textbox_id) {
-                                    if let Some(line) = textbox.lines.get_mut(line_idx) {
-                                        line.text = self.temp_edit_text.clone();
-                                    }
-                                }
-                                self.editing_textbox = None;
-                                self.editing_line_idx = None;
-                                self.temp_edit_text.clear();
-                            }
-
-                            if ui.button("Cancel").clicked() || (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape))) {
-                                self.editing_textbox = None;
-                                self.editing_line_idx = None;
-                                self.temp_edit_text.clear();
-                            }
-                        });
-                    });
-            }
-        }
-    }
-
-    fn render_formatting_dialog(&mut self, ctx: &egui::Context) {
-        if let (Some(textbox_id), Some(line_idx)) = (self.editing_textbox, self.editing_line_idx) {
-            // Get current values first
-            let textbox_opt = self.notes_canvas.text_boxes.iter().find(|tb| tb.id == textbox_id);
-            if let Some(textbox) = textbox_opt {
-                if let Some(line) = textbox.lines.get(line_idx) {
-                    if !line.text.is_empty() && self.temp_edit_text.is_empty() {
-                        // Clone current values
-                        let mut bullet_style = line.bullet_style;
-                        let mut bullet_color = line.bullet_color;
-                        let mut font_size = textbox.font_size;
-                        let mut text_color = textbox.text_color;
-                        let mut close_dialog = false;
-
-                        egui::Window::new("Format Line")
-                            .collapsible(false)
-                            .resizable(false)
-                            .show(ctx, |ui| {
-                                ui.label("Bullet Style:");
-                                ui.horizontal(|ui| {
-                                    if ui.selectable_label(matches!(bullet_style, BulletStyle::None), "None").clicked() {
-                                        bullet_style = BulletStyle::None;
-                                    }
-                                    if ui.selectable_label(matches!(bullet_style, BulletStyle::Circle), "● Circle").clicked() {
-                                        bullet_style = BulletStyle::Circle;
-                                    }
-                                    if ui.selectable_label(matches!(bullet_style, BulletStyle::Square), "■ Square").clicked() {
-                                        bullet_style = BulletStyle::Square;
-                                    }
-                                    if ui.selectable_label(matches!(bullet_style, BulletStyle::Dash), "– Dash").clicked() {
-                                        bullet_style = BulletStyle::Dash;
-                                    }
-                                    if ui.selectable_label(matches!(bullet_style, BulletStyle::Numbered(_)), "1. Numbered").clicked() {
-                                        let num = self.calculate_numbered_position(textbox, line_idx);
-                                        bullet_style = BulletStyle::Numbered(num);
-                                    }
-                                });
-
-                                ui.add_space(8.0);
-
-                                if !matches!(bullet_style, BulletStyle::None) {
-                                    ui.label("Bullet Color:");
-                                    ui.horizontal(|ui| {
-                                        self.render_color_palette(ui, &mut bullet_color);
-                                    });
-                                }
-
-                                ui.add_space(8.0);
-
-                                ui.label("Font Size:");
-                                ui.add(egui::Slider::new(&mut font_size, 8.0..=32.0).suffix(" pt"));
-
-                                ui.add_space(8.0);
-
-                                ui.label("Text Color:");
-                                ui.horizontal(|ui| {
-                                    self.render_color_palette(ui, &mut text_color);
-                                });
-
-                                ui.add_space(8.0);
-
-                                if ui.button("Close").clicked() {
-                                    close_dialog = true;
-                                }
-                            });
-
-                        // Update the actual textbox with the modified values
-                        if let Some(textbox) = self.notes_canvas.text_boxes.iter_mut().find(|tb| tb.id == textbox_id) {
-                            if let Some(line) = textbox.lines.get_mut(line_idx) {
-                                line.bullet_style = bullet_style;
-                                line.bullet_color = bullet_color;
-                            }
-                            textbox.font_size = font_size;
-                            textbox.text_color = text_color;
-                        }
-
-                        if close_dialog {
-                            self.editing_textbox = None;
-                            self.editing_line_idx = None;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    fn calculate_numbered_position(&self, textbox: &TextBox, line_idx: usize) -> usize {
-        let mut num = 1;
-        for i in 0..line_idx {
-            if matches!(textbox.lines[i].bullet_style, BulletStyle::Numbered(_)) {
-                num += 1;
-            }
-        }
-        num
-    }
-
-    fn render_color_palette(&self, ui: &mut egui::Ui, current_color: &mut egui::Color32) {
-        let colors = [
-            ("White", egui::Color32::WHITE),
-            ("Red", egui::Color32::from_rgb(220, 38, 38)),
-            ("Blue", egui::Color32::from_rgb(37, 99, 235)),
-            ("Green", egui::Color32::from_rgb(22, 163, 74)),
-            ("Yellow", egui::Color32::from_rgb(234, 179, 8)),
-            ("Purple", egui::Color32::from_rgb(147, 51, 234)),
-            ("Orange", egui::Color32::from_rgb(249, 115, 22)),
-            ("Pink", egui::Color32::from_rgb(236, 72, 153)),
-        ];
-
-        for (name, color) in colors {
-            let button = egui::Button::new("")
-                .fill(color)
-                .min_size(egui::vec2(25.0, 25.0));
-
-            if ui.add(button).on_hover_text(name).clicked() {
-                *current_color = color;
-            }
-        }
-
-        // Custom color picker
-        ui.color_edit_button_srgba(current_color);
     }
 
     // Todo methods
