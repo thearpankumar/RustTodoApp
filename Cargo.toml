@@ -13,6 +13,9 @@ assets = [
     { source = "todo_app.desktop", dest = "/usr/share/applications/todo_app.desktop", mode = "644" }
 ]
 
+[package.metadata.wix]
+product-icon = "assets/icon.ico"
+
 [dependencies]
 eframe = { version = "0.33.3", features = ["persistence"] }
 egui = "0.33.3"

@@ -76,7 +76,7 @@ jobs:
 
       - name: Create .rpm
         run: |
-          cargo generate-rpm -p todo_app
+          cargo generate-rpm
           cp target/generate-rpm/*.rpm release_artifacts/
 
       - name: Create AppImage
@@ -147,8 +147,8 @@ jobs:
           cargo install cargo-wix
           # Initialize wix for the specific package
           cargo wix init -p todo_app
-          # Build MSI for the specific package with the icon
-          cargo wix -p todo_app --product-icon assets/icon.ico
+          # Build MSI (icon configured via Cargo.toml metadata)
+          cargo wix -p todo_app
           
           # Move MSI to artifacts
           $out = "release_artifacts"
