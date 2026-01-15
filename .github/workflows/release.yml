@@ -70,7 +70,7 @@ jobs:
           Icon=todo_app
           Categories=Utility;
           EOF
-          cp assets/app_ss3.png todo_app.png
+          cp assets/icon.png todo_app.png
           
           cargo generate-rpm -p todo_app
           cp target/generate-rpm/*.rpm release_artifacts/
@@ -85,7 +85,7 @@ jobs:
           mkdir -p AppDir/usr/bin
           cp target/release/todo_app AppDir/usr/bin/
           cp todo_app.desktop AppDir/
-          cp todo_app.png AppDir/
+          cp assets/icon.png AppDir/
           
           # Run linuxdeploy
           ./linuxdeploy --appdir AppDir --output appimage --icon-file todo_app.png --desktop-file todo_app.desktop
@@ -143,8 +143,8 @@ jobs:
           cargo install cargo-wix
           # Initialize wix for the specific package
           cargo wix init -p todo_app
-          # Build MSI for the specific package
-          cargo wix -p todo_app
+          # Build MSI for the specific package with the icon
+          cargo wix -p todo_app --icon assets/icon.ico
           
           # Move MSI to artifacts
           $out = "release_artifacts"
@@ -179,10 +179,37 @@ jobs:
       - name: Build (Release)
         run: cargo build --release
 
-      - name: Create .tar.gz
+      - name: Create .tar.gz (macOS App Bundle)
         run: |
+          mkdir -p "Todo App.app/Contents/MacOS"
+          mkdir -p "Todo App.app/Contents/Resources"
+          cp target/release/todo_app "Todo App.app/Contents/MacOS/"
+          cp assets/icon.png "Todo App.app/Contents/Resources/"
+          
+          # Create a basic Info.plist
+          cat > "Todo App.app/Contents/Info.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleExecutable</key>
+              <string>todo_app</string>
+              <key>CFBundleIconFile</key>
+              <string>icon.png</string>
+              <key>CFBundleIdentifier</key>
+              <string>com.arpankumar.todoapp</string>
+              <key>CFBundleName</key>
+              <string>Todo App</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleShortVersionString</key>
+              <string>${{ github.ref_name }}</string>
+          </dict>
+          </plist>
+          EOF
+          
           mkdir -p release_artifacts
-          tar -C target/release -czf release_artifacts/todo_app-${{ github.ref_name }}-macos.tar.gz todo_app
+          tar -czf release_artifacts/todo_app-${{ github.ref_name }}-macos.tar.gz "Todo App.app"
 
       - name: Upload macOS Artifacts
         uses: softprops/action-gh-release@v1

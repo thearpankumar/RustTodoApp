@@ -8,7 +8,7 @@ description = "A small todo app built with eframe / egui."
 [package.metadata.generate-rpm]
 assets = [
     { source = "target/release/todo_app", dest = "/usr/bin/todo_app", mode = "755" },
-    { source = "assets/app_ss3.png", dest = "/usr/share/pixmaps/todo_app.png", mode = "644" },
+    { source = "assets/icon.png", dest = "/usr/share/pixmaps/todo_app.png", mode = "644" },
     { source = "todo_app.desktop", dest = "/usr/share/applications/todo_app.desktop", mode = "644" }
 ]
 
@@ -22,6 +22,9 @@ chrono = "0.4"
 egui_commonmark = "0.22"
 serde_json = "1.0"
 
+[build-dependencies]
+winres = "0.1"
+
 # Metadata for cargo-deb so the workflow can produce a .deb
 [package.metadata.deb]
 name = "todo-app"
@@ -29,6 +32,11 @@ maintainer = "thearpankumar arpankumar1119@outlook.com"
 depends = "libc6 (>= 2.17)"
 section = "utils"
 priority = "optional"
+assets = [
+    ["target/release/todo_app", "/usr/bin/todo-app", "755"],
+    ["assets/icon.png", "/usr/share/pixmaps/todo_app.png", "644"],
+    ["todo_app.desktop", "/usr/share/applications/todo_app.desktop", "644"]
+]
 
 [workspace]
 members = ["xtask"]
