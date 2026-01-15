@@ -2,7 +2,6 @@ name: Build and Release (tag)
 
 on:
   push:
-    # Run when a tag is pushed
     tags:
       - '**'
 
@@ -16,7 +15,6 @@ jobs:
       upload_url: ${{ steps.create_release.outputs.upload_url }}
     steps:
       - uses: actions/checkout@v4
-
       - name: Create Release
         id: create_release
         uses: softprops/action-gh-release@v1
@@ -28,58 +26,42 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  build:
-    name: Build and upload artifacts
+  build-linux:
+    name: Build Linux
     needs: create_release
-    runs-on: ${{ matrix.runner }}
+    runs-on: ubuntu-latest
     permissions:
       contents: write
-    strategy:
-      matrix:
-        runner: [ubuntu-latest, windows-latest, macos-latest]
-
     steps:
       - uses: actions/checkout@v4
-
+      
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
-          components: rustfmt, clippy
 
-      - name: Build (release) on Linux/macOS
-        if: matrix.runner != 'windows-latest'
+      - name: Install Dependencies
         run: |
-          set -eux
-          cargo build --release
-        shell: bash
+          sudo apt-get update
+          sudo apt-get install -y libfuse2 file
 
-      - name: Build (release) on Windows
-        if: matrix.runner == 'windows-latest'
-        shell: pwsh
-        run: |
-          cargo build --release
-
-      # Packaging for Linux: produce a .deb using cargo-deb
-      - name: Install Packaging Tools (Linux)
-        if: matrix.runner == 'ubuntu-latest'
+      - name: Install Packaging Tools
         run: |
           cargo install cargo-deb --locked
           cargo install cargo-generate-rpm
 
-      - name: Create .deb (Linux)
-        if: matrix.runner == 'ubuntu-latest'
+      - name: Build (Release)
+        run: cargo build --release
+
+      - name: Create .deb
         run: |
-          set -eux
           cargo deb
           mkdir -p release_artifacts
           cp target/debian/*.deb release_artifacts/
-        shell: bash
 
-      - name: Prepare Assets (Linux)
-        if: matrix.runner == 'ubuntu-latest'
+      - name: Create .rpm
         run: |
-          # Create .desktop file (Needed for AppImage and RPM)
+          # Prepare assets for RPM
           cat > todo_app.desktop <<EOF
           [Desktop Entry]
           Type=Application
@@ -88,31 +70,14 @@ jobs:
           Icon=todo_app
           Categories=Utility;
           EOF
-          
-          # Prepare Icon
           cp assets/app_ss3.png todo_app.png
-
-      # Packaging for Linux: produce an RPM (Fedora/RHEL/OpenSUSE)
-      - name: Create .rpm (Linux)
-        if: matrix.runner == 'ubuntu-latest'
-        run: |
-            set -eux
-            # RPM metadata in Cargo.toml expects todo_app.desktop and todo_app.png in root
-            cargo generate-rpm
-            cp target/generate-rpm/*.rpm release_artifacts/
-        shell: bash
-
-      # Packaging for Linux: produce an AppImage
-      - name: Create AppImage (Linux)
-        if: matrix.runner == 'ubuntu-latest'
-        run: |
-          set -eux
           
-          # Install dependencies
-          sudo apt-get update
-          sudo apt-get install -y libfuse2 file
-          
-          # Download tools
+          cargo generate-rpm
+          cp target/generate-rpm/*.rpm release_artifacts/
+
+      - name: Create AppImage
+        run: |
+          # Download linuxdeploy
           wget -O linuxdeploy https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
           chmod +x linuxdeploy
           
@@ -127,85 +92,13 @@ jobs:
           
           # Move artifact
           mv Todo_App-*.AppImage release_artifacts/todo_app-${{ github.ref_name }}-x86_64.AppImage
-        shell: bash
-        
-      # Packaging for Linux: produce a generic .tar.gz (Arch / Others)
-      - name: Create Generic .tar.gz (Linux)
-        if: matrix.runner == 'ubuntu-latest'
+
+      - name: Create Generic .tar.gz
         run: |
-          set -eux
           tar -czf release_artifacts/todo_app-${{ github.ref_name }}-linux-generic.tar.gz -C target/release todo_app
-        shell: bash
 
-      # Packaging for macOS: bundle the binary into a tar.gz
-
-      # Packaging for macOS: bundle the binary into a tar.gz
-      - name: Create tar.gz (macOS)
-        if: matrix.runner == 'macos-latest'
-        run: |
-          set -eux
-          mkdir -p release_artifacts
-          BIN=target/release/todo_app
-          if [ ! -f "$BIN" ]; then
-            BIN=target/release/todo-app
-          fi
-          if [ ! -f "$BIN" ]; then
-            echo "Binary not found at expected locations"
-            exit 1
-          fi
-          cp "$BIN" release_artifacts/
-          tar -C release_artifacts -czf release_artifacts/todo_app-${{ github.ref_name }}-macos.tar.gz $(basename "$BIN")
-          rm -f release_artifacts/$(basename "$BIN")
-        shell: bash
-
-      # Packaging for Windows: zip and MSI
-      - name: Create Windows Packages
-        if: matrix.runner == 'windows-latest'
-        shell: pwsh
-        run: |
-          $out = "release_artifacts"
-          New-Item -ItemType Directory -Path $out -Force | Out-Null
-          $exe = "target\release\todo_app.exe"
-          
-          # 1. Zip
-          if (Test-Path $exe) {
-             $zipPath = Join-Path $out "todo_app-${{ github.ref_name }}-windows.zip"
-             Compress-Archive -Path $exe -DestinationPath $zipPath -Force
-          }
-          
-          # 2. MSI using cargo-wix
-          cargo install cargo-wix
-          # Initialize wix (defaults) - this generates wix/main.wxs
-          cargo wix init --nocapture
-          # Build MSI
-          cargo wix --nocapture
-          
-          # Move MSI to artifacts
-          # cargo-wix puts msi in target/wix/
-          $msi = Get-ChildItem "target\wix\*.msi" | Select-Object -First 1
-          if ($msi) {
-             Copy-Item $msi.FullName -Destination $out
-          }
-      
-      - name: List artifacts
-        run: |
-          if [ -d release_artifacts ]; then
-            ls -la release_artifacts || true
-          else
-            echo "No artifacts produced on this runner."
-          fi
-        if: matrix.runner != 'windows-latest'
-
-      - name: List artifacts (Windows)
-        if: matrix.runner == 'windows-latest'
-        shell: pwsh
-        run: |
-          if (Test-Path release_artifacts) { Get-ChildItem release_artifacts | Format-Table } else { Write-Host "No artifacts produced on this runner." }
-
-      # Upload assets
-      - name: Upload Release Assets
+      - name: Upload Linux Artifacts
         uses: softprops/action-gh-release@v1
-        if: matrix.runner == 'ubuntu-latest'
         with:
           files: |
             release_artifacts/*.deb
@@ -215,20 +108,85 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload Release Assets (macOS)
-        uses: softprops/action-gh-release@v1
-        if: matrix.runner == 'macos-latest'
+  build-windows:
+    name: Build Windows
+    needs: create_release
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
-          files: release_artifacts/todo_app-${{ github.ref_name }}-macos.tar.gz
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          toolchain: stable
 
-      - name: Upload Release Assets (Windows)
+      - name: Build (Release)
+        shell: pwsh
+        run: cargo build --release
+
+      - name: Create .zip
+        shell: pwsh
+        run: |
+          $out = "release_artifacts"
+          New-Item -ItemType Directory -Path $out -Force | Out-Null
+          $exe = "target\release\todo_app.exe"
+          if (Test-Path $exe) {
+             $zipPath = Join-Path $out "todo_app-${{ github.ref_name }}-windows.zip"
+             Compress-Archive -Path $exe -DestinationPath $zipPath -Force
+          }
+
+      - name: Create .msi
+        shell: pwsh
+        run: |
+          cargo install cargo-wix
+          # Initialize wix without --nocapture (defaults)
+          cargo wix init
+          # Build MSI without --nocapture
+          cargo wix
+          
+          # Move MSI to artifacts
+          $out = "release_artifacts"
+          $msi = Get-ChildItem "target\wix\*.msi" | Select-Object -First 1
+          if ($msi) {
+             Copy-Item $msi.FullName -Destination $out
+          }
+
+      - name: Upload Windows Artifacts
         uses: softprops/action-gh-release@v1
-        if: matrix.runner == 'windows-latest'
         with:
           files: |
             release_artifacts/*.zip
             release_artifacts/*.msi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-macos:
+    name: Build macOS
+    needs: create_release
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Build (Release)
+        run: cargo build --release
+
+      - name: Create .tar.gz
+        run: |
+          mkdir -p release_artifacts
+          tar -C target/release -czf release_artifacts/todo_app-${{ github.ref_name }}-macos.tar.gz todo_app
+
+      - name: Upload macOS Artifacts
+        uses: softprops/action-gh-release@v1
+        with:
+          files: release_artifacts/*.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
