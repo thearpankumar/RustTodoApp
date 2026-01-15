@@ -1,6 +1,6 @@
 [package]
 name = "todo_app"
-version = "2.5.0+2"
+version = "2.5.1"
 edition = "2021"
 license = "MIT"
 
@@ -29,3 +29,6 @@ depends = "libc6 (>= 2.17)"
 section = "utils"
 priority = "optional"
 description = "A small todo app built with eframe / egui."
+
+[workspace]
+members = ["xtask"]
