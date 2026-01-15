@@ -3,6 +3,7 @@ name = "todo_app"
 version = "2.5.1"
 edition = "2021"
 license = "MIT"
+description = "A small todo app built with eframe / egui."
 
 [package.metadata.generate-rpm]
 assets = [
@@ -28,7 +29,6 @@ maintainer = "thearpankumar arpankumar1119@outlook.com"
 depends = "libc6 (>= 2.17)"
 section = "utils"
 priority = "optional"
-description = "A small todo app built with eframe / egui."
 
 [workspace]
 members = ["xtask"]
