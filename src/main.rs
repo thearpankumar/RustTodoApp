@@ -168,7 +168,18 @@ struct TodoApp {
     /// only hides it to the tray.
     #[serde(skip)]
     quitting: bool,
+    /// Frames left in which to re-apply the hide asked for by `--background`.
+    /// eframe applies its own window state over the first few frames, and winit
+    /// rewrites the extended window style whenever it does, which clears the
+    /// flag keeping the window out of the taskbar - so setting it once is not
+    /// enough.
+    #[serde(skip)]
+    start_hidden_frames: u8,
 }
+
+/// Long enough for eframe to finish applying the window state it was built
+/// with, short enough to be over before the user could see a taskbar button.
+const START_HIDDEN_FRAMES: u8 = 8;
 
 impl Default for TodoApp {
     fn default() -> Self {
@@ -196,6 +207,7 @@ impl Default for TodoApp {
             window_visible: true,
             window_size_checked: false,
             quitting: false,
+            start_hidden_frames: 0,
         }
     }
 }
@@ -253,7 +265,12 @@ impl TodoApp {
 
     /// Hands the app its tray icon / hotkey / autostart handle once the event
     /// loop is up, and applies the first-run start-at-login default.
-    fn attach_desktop(&mut self, mut integration: desktop::Desktop, visible: bool) {
+    fn attach_desktop(
+        &mut self,
+        ctx: &egui::Context,
+        mut integration: desktop::Desktop,
+        visible: bool,
+    ) {
         // Only a real install should register itself to start at login; a debug
         // build would point the login entry at target/debug.
         if !self.autostart_configured && !cfg!(debug_assertions) {
@@ -262,7 +279,17 @@ impl TodoApp {
         }
 
         self.desktop = Some(integration);
+
         self.set_window_visible(visible);
+
+        if !visible {
+            // The hide cannot run until the platform window exists, so it is
+            // deferred to the first frames - and asked for, because on a
+            // background start nothing else would request one and the window
+            // would sit in the taskbar until the user touched the tray.
+            self.start_hidden_frames = START_HIDDEN_FRAMES;
+            ctx.request_repaint();
+        }
     }
 
     /// Drains whatever the tray, the global hotkey or a second launch asked for,
@@ -341,16 +368,11 @@ impl TodoApp {
         self.set_window_visible(false);
     }
 
-    /// The listener threads need this too: a hidden window has to be woken from
-    /// outside the paint loop before it can act on anything.
     fn set_window_visible(&mut self, visible: bool) {
         if !visible {
             self.window_size_checked = false;
         }
         self.window_visible = visible;
-        if let Some(integration) = self.desktop.as_ref() {
-            integration.visibility.set(visible);
-        }
     }
 }
 
@@ -381,6 +403,12 @@ impl eframe::App for TodoApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.start_hidden_frames > 0 {
+            self.start_hidden_frames -= 1;
+            self.hide_window(ctx);
+            ctx.request_repaint();
+        }
+
         self.handle_desktop_commands(ctx);
         self.recover_degenerate_window_size(ctx);
 
@@ -1774,11 +1802,13 @@ fn main() -> Result<(), eframe::Error> {
             egui_material_icons::initialize(&cc.egui_ctx);
 
             // Don't override fonts at all to preserve material icons
+            desktop::register_window(cc);
+
             let mut app = TodoApp::new(cc);
-            let visible = !cli.background;
             app.attach_desktop(
-                desktop::Desktop::new(&cc.egui_ctx, listener, visible),
-                visible,
+                &cc.egui_ctx,
+                desktop::Desktop::new(&cc.egui_ctx, listener),
+                !cli.background,
             );
             Ok(Box::new(app))
         }),

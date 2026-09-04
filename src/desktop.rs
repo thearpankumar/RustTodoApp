@@ -255,12 +255,19 @@ fn tray_icon() -> Option<tray_icon::Icon> {
 // Showing and hiding the window
 // ---------------------------------------------------------------------------
 //
-// eframe only processes viewport commands while it is painting, and a window
-// that the compositor has hidden never paints. So a genuinely hidden window
-// cannot bring itself back: something outside the paint loop has to make it
-// visible first. On Windows that is a `ShowWindow` call. Everywhere else the
-// window is minimised instead of hidden, which keeps it painting - the taskbar
-// entry stays, but the tray icon and the hotkey behave the same.
+// The window is never taken off screen with `ShowWindow(SW_HIDE)`. That clears
+// WS_VISIBLE, and Windows does not deliver WM_PAINT to an invisible window, so
+// winit's `request_redraw` - which is a `RedrawWindow` call - produces nothing.
+// eframe is then left waiting for a `RedrawRequested` that can never arrive
+// while holding its event loop in `ControlFlow::Poll`, which burns a whole CPU
+// core for as long as the app sits in the tray. See
+// https://github.com/emilk/egui/issues/3982.
+//
+// Minimising keeps WS_VISIBLE set, so repaints still arrive and the loop parks
+// in `ControlFlow::Wait` between them, while WS_EX_TOOLWINDOW drops the window
+// from the taskbar and Alt+Tab so that a minimised window reads as a hidden
+// one. X11 and Wayland queue redraw requests inside winit rather than going
+// through the display server, so they were never affected and simply minimise.
 
 #[cfg(windows)]
 mod window_control {
@@ -269,12 +276,26 @@ mod window_control {
     use windows_sys::Win32::{
         Foundation::{HWND, LPARAM, TRUE},
         UI::WindowsAndMessaging::{
-            EnumWindows, GetWindowTextW, GetWindowThreadProcessId, SetForegroundWindow, ShowWindow,
-            SW_HIDE, SW_SHOW, SW_SHOWNA,
+            EnumWindows, GetWindowLongPtrW, GetWindowTextW, GetWindowThreadProcessId,
+            SetForegroundWindow, SetWindowLongPtrW, ShowWindow, GWL_EXSTYLE, SW_HIDE, SW_RESTORE,
+            SW_SHOWMINNOACTIVE, WS_EX_TOOLWINDOW,
         },
     };
 
     static WINDOW: AtomicIsize = AtomicIsize::new(0);
+
+    /// eframe knows which window it made, and hands it over before the first
+    /// frame - earlier and more reliably than the search below can find it.
+    pub fn register(cc: &eframe::CreationContext<'_>) {
+        use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
+
+        let Ok(handle) = cc.window_handle() else {
+            return;
+        };
+        if let RawWindowHandle::Win32(win32) = handle.as_raw() {
+            WINDOW.store(win32.hwnd.get(), Ordering::Relaxed);
+        }
+    }
 
     /// The winit window is the only top-level window this process gives a title
     /// to; the tray and IME helper windows are all untitled.
@@ -312,42 +333,58 @@ mod window_control {
         }
     }
 
-    /// Takes the window off screen and out of the taskbar entirely.
-    pub fn hide() -> bool {
-        match handle() {
-            Some(window) => {
-                unsafe { ShowWindow(window, SW_HIDE) };
-                true
-            }
-            None => false,
+    /// The taskbar and Alt+Tab only re-read WS_EX_TOOLWINDOW when a window is
+    /// shown, so the style is changed while the window is off screen.
+    fn set_tool_window(window: HWND, tool: bool) {
+        let style = unsafe { GetWindowLongPtrW(window, GWL_EXSTYLE) };
+        let wanted = if tool {
+            style | WS_EX_TOOLWINDOW as isize
+        } else {
+            style & !(WS_EX_TOOLWINDOW as isize)
+        };
+        if wanted != style {
+            unsafe { SetWindowLongPtrW(window, GWL_EXSTYLE, wanted) };
         }
+    }
+
+    /// Minimises the window and drops it from the taskbar and Alt+Tab, which
+    /// looks like hiding but leaves the window paintable.
+    pub fn hide() -> bool {
+        let Some(window) = handle() else {
+            return false;
+        };
+        unsafe { ShowWindow(window, SW_HIDE) };
+        set_tool_window(window, true);
+        unsafe { ShowWindow(window, SW_SHOWMINNOACTIVE) };
+        true
     }
 
     pub fn show() {
-        if let Some(window) = handle() {
-            unsafe {
-                ShowWindow(window, SW_SHOW);
-                SetForegroundWindow(window);
-            }
-        }
-    }
-
-    /// Makes a hidden window paintable again without stealing focus, so the UI
-    /// loop starts running and can act on the command that is about to arrive.
-    pub fn wake() {
-        if let Some(window) = handle() {
-            unsafe { ShowWindow(window, SW_SHOWNA) };
+        let Some(window) = handle() else {
+            return;
+        };
+        unsafe { ShowWindow(window, SW_HIDE) };
+        set_tool_window(window, false);
+        unsafe {
+            ShowWindow(window, SW_RESTORE);
+            SetForegroundWindow(window);
         }
     }
 }
 
 #[cfg(not(windows))]
 mod window_control {
+    pub fn register(_cc: &eframe::CreationContext<'_>) {}
     pub fn hide() -> bool {
         false
     }
     pub fn show() {}
-    pub fn wake() {}
+}
+
+/// Records the window eframe created, so hiding it does not depend on finding
+/// it first.
+pub fn register_window(cc: &eframe::CreationContext<'_>) {
+    window_control::register(cc);
 }
 
 pub fn hide_window(ctx: &egui::Context) {
@@ -359,6 +396,9 @@ pub fn hide_window(ctx: &egui::Context) {
 
 pub fn show_window(ctx: &egui::Context) {
     window_control::show();
+    // `--background` starts the window invisible, so bringing it back has to
+    // undo that as well as the minimise.
+    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
     ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
     ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
 }
@@ -367,32 +407,10 @@ pub fn show_window(ctx: &egui::Context) {
 // The resident desktop presence
 // ---------------------------------------------------------------------------
 
-/// Shared with the listener threads so they can wake a hidden window before
-/// handing the command on to the UI loop, which only runs while it paints.
-#[derive(Clone, Default)]
-pub struct Visibility(std::sync::Arc<std::sync::atomic::AtomicBool>);
-
-impl Visibility {
-    pub fn set(&self, visible: bool) {
-        self.0.store(visible, std::sync::atomic::Ordering::Relaxed);
-    }
-
-    fn get(&self) -> bool {
-        self.0.load(std::sync::atomic::Ordering::Relaxed)
-    }
-}
-
-/// Hands one command to the UI loop, waking the window first if it is hidden.
+/// Hands one command to the UI loop. The window is always paintable - hiding it
+/// only minimises it - so a repaint request is enough to get it acted on.
 /// Returns false once the app has gone away, which ends the listener thread.
-fn notify(
-    tx: &Sender<Command>,
-    ctx: &egui::Context,
-    visibility: &Visibility,
-    command: Command,
-) -> bool {
-    if !visibility.get() {
-        window_control::wake();
-    }
+fn notify(tx: &Sender<Command>, ctx: &egui::Context, command: Command) -> bool {
     if tx.send(command).is_err() {
         return false;
     }
@@ -402,8 +420,6 @@ fn notify(
 
 pub struct Desktop {
     events: Receiver<Command>,
-    /// Kept in step with the window by the UI loop.
-    pub visibility: Visibility,
     autostart: Option<auto_launch::AutoLaunch>,
     /// Whether the app is currently registered to start at login.
     pub autostart_enabled: bool,
@@ -417,12 +433,10 @@ pub struct Desktop {
 }
 
 impl Desktop {
-    pub fn new(ctx: &egui::Context, listener: TcpListener, visible: bool) -> Self {
+    pub fn new(ctx: &egui::Context, listener: TcpListener) -> Self {
         let (tx, events) = mpsc::channel();
-        let visibility = Visibility::default();
-        visibility.set(visible);
 
-        spawn_control_listener(listener, tx.clone(), ctx.clone(), visibility.clone());
+        spawn_control_listener(listener, tx.clone(), ctx.clone());
 
         let autostart = build_autostart();
         let autostart_enabled = autostart
@@ -431,9 +445,9 @@ impl Desktop {
             .unwrap_or(false);
 
         let (hotkeys, hotkey_active) = register_hotkey();
-        spawn_hotkey_listener(tx.clone(), ctx.clone(), visibility.clone());
-        spawn_menu_listener(tx.clone(), ctx.clone(), visibility.clone());
-        spawn_tray_click_listener(tx, ctx.clone(), visibility.clone());
+        spawn_hotkey_listener(tx.clone(), ctx.clone());
+        spawn_menu_listener(tx.clone(), ctx.clone());
+        spawn_tray_click_listener(tx, ctx.clone());
 
         #[cfg(target_os = "linux")]
         spawn_linux_tray(autostart_enabled);
@@ -443,7 +457,6 @@ impl Desktop {
 
         Self {
             events,
-            visibility,
             autostart,
             autostart_enabled,
             hotkey_active,
@@ -578,12 +591,7 @@ fn spawn_linux_tray(autostart_enabled: bool) {
     });
 }
 
-fn spawn_control_listener(
-    listener: TcpListener,
-    tx: Sender<Command>,
-    ctx: egui::Context,
-    visibility: Visibility,
-) {
+fn spawn_control_listener(listener: TcpListener, tx: Sender<Command>, ctx: egui::Context) {
     thread::spawn(move || {
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else { continue };
@@ -597,14 +605,14 @@ fn spawn_control_listener(
             let Some(command) = Command::from_byte(byte[0]) else {
                 continue;
             };
-            if !notify(&tx, &ctx, &visibility, command) {
+            if !notify(&tx, &ctx, command) {
                 break;
             }
         }
     });
 }
 
-fn spawn_hotkey_listener(tx: Sender<Command>, ctx: egui::Context, visibility: Visibility) {
+fn spawn_hotkey_listener(tx: Sender<Command>, ctx: egui::Context) {
     thread::spawn(move || {
         let receiver = GlobalHotKeyEvent::receiver();
         while let Ok(event) = receiver.recv() {
@@ -613,14 +621,14 @@ fn spawn_hotkey_listener(tx: Sender<Command>, ctx: egui::Context, visibility: Vi
             if event.state != HotKeyState::Pressed {
                 continue;
             }
-            if !notify(&tx, &ctx, &visibility, Command::Toggle) {
+            if !notify(&tx, &ctx, Command::Toggle) {
                 break;
             }
         }
     });
 }
 
-fn spawn_menu_listener(tx: Sender<Command>, ctx: egui::Context, visibility: Visibility) {
+fn spawn_menu_listener(tx: Sender<Command>, ctx: egui::Context) {
     thread::spawn(move || {
         let receiver = MenuEvent::receiver();
         while let Ok(event) = receiver.recv() {
@@ -630,14 +638,14 @@ fn spawn_menu_listener(tx: Sender<Command>, ctx: egui::Context, visibility: Visi
                 MENU_QUIT => Command::Quit,
                 _ => continue,
             };
-            if !notify(&tx, &ctx, &visibility, command) {
+            if !notify(&tx, &ctx, command) {
                 break;
             }
         }
     });
 }
 
-fn spawn_tray_click_listener(tx: Sender<Command>, ctx: egui::Context, visibility: Visibility) {
+fn spawn_tray_click_listener(tx: Sender<Command>, ctx: egui::Context) {
     thread::spawn(move || {
         let receiver = TrayIconEvent::receiver();
         while let Ok(event) = receiver.recv() {
@@ -654,7 +662,7 @@ fn spawn_tray_click_listener(tx: Sender<Command>, ctx: egui::Context, visibility
             {
                 continue;
             }
-            if !notify(&tx, &ctx, &visibility, Command::Toggle) {
+            if !notify(&tx, &ctx, Command::Toggle) {
                 break;
             }
         }

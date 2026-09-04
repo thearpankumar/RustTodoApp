@@ -1,6 +1,6 @@
 [package]
 name = "todo_app"
-version = "2.9.1"
+version = "3.0.0"
 edition = "2021"
 license = "MIT"
 authors = ["thearpankumar <arpankumar1119@outlook.com>"]
@@ -84,3 +84,7 @@ gtk = "0.18"
 
 [target."cfg(windows)".dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+# Lets the app take the window handle straight from eframe instead of hunting
+# for it by title. Pinned to the version eframe itself uses so the handle types
+# are the same ones.
+raw-window-handle = "0.6.2"
