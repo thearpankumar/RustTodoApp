@@ -11,18 +11,31 @@ env:
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
 
     steps:
     - uses: actions/checkout@v4
-    - name: Check Formatting
+
+    # The system tray is built on GTK + libappindicator, and tray-icon's default
+    # feature set links libxdo, so these are build-time requirements on Linux.
+    - name: Install Linux build dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libgtk-3-dev libxdo-dev libayatana-appindicator3-dev
+
+    - uses: Swatinem/rust-cache@v2
+
+    - name: Format
       run: cargo fmt -- --check
-    - name: Clippy (Linting)
-      run: cargo clippy -- -D warnings
+
+    - name: Clippy
+      run: cargo clippy --all-targets -- -D warnings
+
     - name: Check
       run: cargo check --verbose
+
     - name: Build
       run: cargo build --verbose
-    - name: Run tests
+
+    - name: Test
       run: cargo test --verbose

@@ -26,3 +26,18 @@ todo_data.json
 # AI Assistant artifacts
 .claude/
 .gemini/
+# Packaging output. The release workflow builds these in the repo root, and
+# cargo-deb / cargo-generate-rpm / cargo-wix write into target/.
+/release_artifacts/
+/AppDir/
+/linuxdeploy
+/todo_app.png
+/todo_app
+/todo_app.desktop
+/Todo App.app/
+/dmg/
+*.msi
+*.deb
+*.rpm
+*.dmg
+*.AppImage

@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=Todo App
+GenericName=Todo and Notes
+Comment=Projects, tasks and a notes canvas, one keystroke away
+Exec=todo_app
+Icon=todo_app
+Terminal=false
+Categories=Utility;Office;
+Keywords=todo;task;tasks;notes;project;checklist;
+# Must match ViewportBuilder::with_app_id in src/main.rs, or the window will not
+# be associated with this launcher entry.
+StartupWMClass=todo_app
+StartupNotify=true

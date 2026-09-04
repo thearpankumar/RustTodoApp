@@ -1,0 +1,30 @@
+# Line endings are decided here, not by each developer's core.autocrlf.
+#
+# Everything text is stored as LF in the repository AND checked out as LF on
+# every platform, so a Windows checkout and a Linux checkout produce identical
+# files and nobody sees "LF will be replaced by CRLF" warnings or whole-file
+# diffs when they touch a file someone else wrote.
+* text=auto eol=lf
+
+# Shell scripts break outright with CRLF, so they are pinned explicitly even if
+# the blanket rule above is ever relaxed.
+*.sh text eol=lf
+*.desktop text eol=lf
+*.plist text eol=lf
+
+# Windows-only scripts are the one place CRLF is wanted.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Never touch these.
+*.png binary
+*.ico binary
+*.icns binary
+*.ttf binary
+*.otf binary
+*.msi binary
+*.deb binary
+*.rpm binary
+*.dmg binary
+*.AppImage binary

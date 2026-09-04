@@ -11,13 +11,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    outputs:
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
     steps:
       - uses: actions/checkout@v4
       - name: Create Release
-        id: create_release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           name: ${{ github.ref_name }}
           body: "Automatic release for tag ${{ github.ref_name }}"
@@ -34,7 +31,7 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -43,67 +40,62 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libfuse2 file
+          # libgtk-3-dev / libayatana-appindicator3-dev / libxdo-dev are needed to
+          # build the tray icon. libfuse2 was renamed on Ubuntu 24.04, so accept
+          # either name rather than failing the whole job.
+          sudo apt-get install -y file libgtk-3-dev libxdo-dev libayatana-appindicator3-dev
+          sudo apt-get install -y libfuse2t64 || sudo apt-get install -y libfuse2
+
+      - uses: Swatinem/rust-cache@v2
 
       - name: Install Packaging Tools
         run: |
           cargo install cargo-deb --locked
-          cargo install cargo-generate-rpm
+          cargo install cargo-generate-rpm --locked
 
       - name: Build (Release)
         run: cargo build --release
 
-      - name: Prepare Assets (Linux)
-        run: |
-          # Create .desktop file (Needed for AppImage, DEB and RPM)
-          cat > todo_app.desktop <<EOF
-          [Desktop Entry]
-          Type=Application
-          Name=Todo App
-          Exec=todo_app
-          Icon=icon
-          Categories=Utility;
-          EOF
-          
-          # Prepare Icon
-          cp assets/icon.png todo_app.png
-
       - name: Create .deb
         run: |
-          cargo deb -p todo_app
           mkdir -p release_artifacts
+          cargo deb -p todo_app
           cp target/debian/*.deb release_artifacts/
 
       - name: Create .rpm
         run: |
-          cargo generate-rpm
           mkdir -p release_artifacts
+          cargo generate-rpm
           cp target/generate-rpm/*.rpm release_artifacts/
 
       - name: Create AppImage
         run: |
-          # Download linuxdeploy
-          wget -O linuxdeploy https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          mkdir -p release_artifacts
+
+          wget -q -O linuxdeploy https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
           chmod +x linuxdeploy
-          
-          # Setup AppDir
+
+          # The icon basename has to match Icon= in the desktop entry.
+          cp assets/icons/256x256.png todo_app.png
+
           mkdir -p AppDir/usr/bin
           cp target/release/todo_app AppDir/usr/bin/
-          cp todo_app.desktop AppDir/
-          cp assets/icon.png AppDir/
-          
-          # Run linuxdeploy
-          ./linuxdeploy --appdir AppDir --output appimage --icon-file assets/icon.png --desktop-file todo_app.desktop
-          
-          # Move artifact
-          mv Todo_App-*.AppImage release_artifacts/todo_app-${{ github.ref_name }}-x86_64.AppImage
+
+          ./linuxdeploy \
+            --appdir AppDir \
+            --output appimage \
+            --icon-file todo_app.png \
+            --desktop-file packaging/linux/todo_app.desktop
+
+          mv ./*.AppImage release_artifacts/todo_app-${{ github.ref_name }}-x86_64.AppImage
 
       - name: Create Generic .tar.gz
         run: |
-          tar -czf release_artifacts/todo_app-${{ github.ref_name }}-linux-generic.tar.gz -C target/release todo_app
+          tar -czf release_artifacts/todo_app-${{ github.ref_name }}-linux-generic.tar.gz \
+            -C target/release todo_app
 
       - name: Upload Linux Artifacts
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: |
             release_artifacts/*.deb
@@ -121,11 +113,13 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
+
+      - uses: Swatinem/rust-cache@v2
 
       - name: Build (Release)
         shell: pwsh
@@ -134,32 +128,22 @@ jobs:
       - name: Create .zip
         shell: pwsh
         run: |
-          $out = "release_artifacts"
-          New-Item -ItemType Directory -Path $out -Force | Out-Null
-          $exe = "target\release\todo_app.exe"
-          if (Test-Path $exe) {
-             $zipPath = Join-Path $out "todo_app-${{ github.ref_name }}-windows.zip"
-             Compress-Archive -Path $exe -DestinationPath $zipPath -Force
-          }
+          New-Item -ItemType Directory -Path release_artifacts -Force | Out-Null
+          Compress-Archive -Path target\release\todo_app.exe `
+            -DestinationPath release_artifacts\todo_app-${{ github.ref_name }}-windows.zip -Force
 
       - name: Create .msi
         shell: pwsh
         run: |
-          cargo install cargo-wix
-          # Initialize wix for the specific package
-          cargo wix init -p todo_app
-          # Build MSI (icon configured via Cargo.toml metadata)
-          cargo wix -p todo_app
-          
-          # Move MSI to artifacts
-          $out = "release_artifacts"
-          $msi = Get-ChildItem "target\wix\*.msi" | Select-Object -First 1
-          if ($msi) {
-             Copy-Item $msi.FullName -Destination $out
-          }
+          cargo install cargo-wix --locked
+          # No `cargo wix init` here on purpose: it would overwrite the committed
+          # wix\main.wxs, which is the only thing that adds the Start menu entry.
+          cargo wix -p todo_app --nocapture
+          Copy-Item (Get-ChildItem target\wix\*.msi | Select-Object -First 1).FullName `
+            -Destination release_artifacts
 
       - name: Upload Windows Artifacts
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: |
             release_artifacts/*.zip
@@ -175,50 +159,58 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
 
-      - name: Build (Release)
-        run: cargo build --release
+      - uses: Swatinem/rust-cache@v2
 
-      - name: Create .tar.gz (macOS App Bundle)
+      - name: Build universal binary
         run: |
-          mkdir -p "Todo App.app/Contents/MacOS"
-          mkdir -p "Todo App.app/Contents/Resources"
-          cp target/release/todo_app "Todo App.app/Contents/MacOS/"
-          cp assets/icon.png "Todo App.app/Contents/Resources/"
-          
-          # Create a basic Info.plist
-          cat > "Todo App.app/Contents/Info.plist" <<EOF
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-              <key>CFBundleExecutable</key>
-              <string>todo_app</string>
-              <key>CFBundleIconFile</key>
-              <string>icon.png</string>
-              <key>CFBundleIdentifier</key>
-              <string>com.arpankumar.todoapp</string>
-              <key>CFBundleName</key>
-              <string>Todo App</string>
-              <key>CFBundlePackageType</key>
-              <string>APPL</string>
-              <key>CFBundleShortVersionString</key>
-              <string>${{ github.ref_name }}</string>
-          </dict>
-          </plist>
-          EOF
-          
-          mkdir -p release_artifacts
-          tar -czf release_artifacts/todo_app-${{ github.ref_name }}-macos.tar.gz "Todo App.app"
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+          lipo -create -output todo_app \
+            target/aarch64-apple-darwin/release/todo_app \
+            target/x86_64-apple-darwin/release/todo_app
+          lipo -info todo_app
+
+      - name: Build .app bundle
+        run: |
+          # Info.plist wants a plain version; tags are usually prefixed with v.
+          VERSION="${GITHUB_REF_NAME#v}"
+
+          APP="Todo App.app"
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+          cp todo_app "$APP/Contents/MacOS/todo_app"
+          chmod +x "$APP/Contents/MacOS/todo_app"
+          # CFBundleIconFile is AppIcon, and it must be a real .icns.
+          cp assets/icon.icns "$APP/Contents/Resources/AppIcon.icns"
+          sed "s/@VERSION@/${VERSION}/g" packaging/macos/Info.plist > "$APP/Contents/Info.plist"
+
+          plutil -lint "$APP/Contents/Info.plist"
+
+      - name: Create .dmg and .tar.gz
+        run: |
+          mkdir -p release_artifacts dmg
+          cp -R "Todo App.app" dmg/
+          ln -s /Applications dmg/Applications
+
+          hdiutil create \
+            -volname "Todo App" \
+            -srcfolder dmg \
+            -ov -format UDZO \
+            "release_artifacts/todo_app-${{ github.ref_name }}-macos.dmg"
+
+          tar -czf "release_artifacts/todo_app-${{ github.ref_name }}-macos.tar.gz" "Todo App.app"
 
       - name: Upload macOS Artifacts
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
-          files: release_artifacts/*.tar.gz
+          files: |
+            release_artifacts/*.dmg
+            release_artifacts/*.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

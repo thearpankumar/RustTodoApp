@@ -6,3 +6,6 @@ publish = false
 
 [dependencies]
 anyhow = "1.0"
+icns = "0.4"
+ico = "0.5"
+resvg = "0.48"

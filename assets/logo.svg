@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>Todo App</title>
+  <!--
+    Two pinned sticky notes. Every stroke shares one vertical blue-to-magenta
+    ramp across the whole canvas, so the gradients inside the rotated groups
+    carry a counter-rotation to keep them upright in canvas space.
+  -->
+  <defs>
+    <linearGradient id="ink" gradientUnits="userSpaceOnUse" x1="0" y1="-12" x2="0" y2="512">
+      <stop offset="0" stop-color="#004EA7"/>
+      <stop offset="1" stop-color="#CF41B3"/>
+    </linearGradient>
+
+    <linearGradient id="inkBack" gradientUnits="userSpaceOnUse"
+                    x1="0" y1="-12" x2="0" y2="512"
+                    gradientTransform="rotate(-10 192 226)">
+      <stop offset="0" stop-color="#004EA7"/>
+      <stop offset="1" stop-color="#CF41B3"/>
+    </linearGradient>
+
+    <linearGradient id="inkFront" gradientUnits="userSpaceOnUse"
+                    x1="0" y1="-12" x2="0" y2="512"
+                    gradientTransform="rotate(14.5 300 250)">
+      <stop offset="0" stop-color="#004EA7"/>
+      <stop offset="1" stop-color="#CF41B3"/>
+    </linearGradient>
+
+    <linearGradient id="paperFront" gradientUnits="userSpaceOnUse"
+                    x1="0" y1="0" x2="0" y2="512"
+                    gradientTransform="rotate(14.5 300 250)">
+      <stop offset="0" stop-color="#99A7FF"/>
+      <stop offset="1" stop-color="#FFD2FF"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Back note -->
+  <g transform="rotate(10 192 226)">
+    <rect x="29" y="63" width="326" height="326"
+          fill="#FFFFFF" stroke="url(#inkBack)" stroke-width="22" stroke-linejoin="round"/>
+  </g>
+
+  <!-- Front note -->
+  <g transform="rotate(-14.5 300 250)">
+    <!-- Sheet, with the bottom-right corner turned up. -->
+    <path d="M 126 76 H 474 V 338 L 388 424 H 126 Z"
+          fill="url(#paperFront)" stroke="url(#inkFront)"
+          stroke-width="22" stroke-linejoin="round"/>
+    <path d="M 474 338 H 388 V 424"
+          fill="none" stroke="url(#inkFront)"
+          stroke-width="22" stroke-linejoin="round"/>
+
+    <!-- "To Do" -->
+    <g transform="translate(176 148) scale(0.62)" fill="url(#inkFront)">
+      <path d="M 0 0 H 96 V 26 H 61 V 92 H 35 V 26 H 0 Z"/>
+      <circle cx="150" cy="60" r="26" fill="none" stroke="url(#inkFront)" stroke-width="22"/>
+      <path d="M 245 0 H 280 A 46 46 0 0 1 280 92 H 245 Z"/>
+      <path d="M 267 22 H 280 A 24 24 0 0 1 280 70 H 267 Z" fill="url(#paperFront)"/>
+      <circle cx="375" cy="60" r="26" fill="none" stroke="url(#inkFront)" stroke-width="22"/>
+    </g>
+
+    <!-- Ruled lines -->
+    <g stroke="url(#inkFront)" stroke-width="20" stroke-linecap="square">
+      <path d="M 172 278 H 436"/>
+      <path d="M 172 334 H 404"/>
+    </g>
+  </g>
+
+  <!-- Push pin -->
+  <path d="M 300 104 L 276 152" fill="none" stroke="url(#ink)"
+        stroke-width="20" stroke-linecap="round"/>
+  <circle cx="318" cy="68" r="46" fill="#FFFFFF" stroke="url(#ink)" stroke-width="20"/>
+  <circle cx="336" cy="46" r="26" fill="#FFFFFF" stroke="url(#ink)" stroke-width="20"/>
+</svg>

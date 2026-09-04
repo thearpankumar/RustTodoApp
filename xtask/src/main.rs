@@ -1,3 +1,5 @@
+mod icons;
+
 use std::{env, path::PathBuf, process::Command};
 
 type DynError = Box<dyn std::error::Error>;
@@ -14,6 +16,7 @@ fn try_main() -> Result<(), DynError> {
 
     match task.as_deref() {
         Some("ci") => task_ci()?,
+        Some("icons") => task_icons()?,
         _ => print_help(),
     }
     Ok(())
@@ -22,7 +25,8 @@ fn try_main() -> Result<(), DynError> {
 fn print_help() {
     eprintln!(
         "Tasks:
-ci     Run formatting, linting, and check
+ci       Run formatting, linting, and check
+icons    Regenerate every packaging icon from assets/logo.svg
 "
     )
 }
@@ -43,7 +47,7 @@ fn task_ci() -> Result<(), DynError> {
     // 2. Clippy
     println!("\n➔ Running cargo clippy...");
     let status = Command::new("cargo")
-        .args(["clippy", "--", "-D", "warnings"])
+        .args(["clippy", "--all-targets", "--", "-D", "warnings"])
         .current_dir(project_root())
         .status()?;
     if !status.success() {
@@ -61,6 +65,16 @@ fn task_ci() -> Result<(), DynError> {
     }
 
     println!("\n✅ CI commands passed successfully!");
+    Ok(())
+}
+
+fn task_icons() -> Result<(), DynError> {
+    println!("cargo-xtask: Rendering icons from assets/logo.svg...");
+    icons::run(&project_root())?;
+    println!(
+        "
+Icons regenerated."
+    );
     Ok(())
 }
 

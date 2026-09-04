@@ -1,2 +1,3 @@
 [alias]
 ci = "run --package xtask --bin xtask -- ci"
+icons = "run --package xtask --bin xtask -- icons"
