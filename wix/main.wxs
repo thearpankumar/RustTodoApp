@@ -56,7 +56,7 @@
                     <Component Id='AppPaths' Guid='8F333AD7-B7A7-476C-A809-EEFB6FEA5FEC'>
                         <RegistryKey Root='HKLM'
                             Key='SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\todo_app.exe'>
-                            <RegistryValue Type='string' Value='[#exe0]' KeyPath='yes'/>
+                            <RegistryValue Type='string' Value='[Bin]todo_app.exe' KeyPath='yes'/>
                             <RegistryValue Name='Path' Type='string' Value='[Bin]'/>
                         </RegistryKey>
                     </Component>
@@ -88,7 +88,6 @@
                                     Name='Todo App'
                                     Description='Projects, tasks and a notes canvas, one keystroke away'
                                     WorkingDirectory='Bin'
-                                    Icon='ProductICO'
                                     Advertise='yes'/>
                             </File>
                         </Component>
@@ -103,11 +102,10 @@
                     <Shortcut Id='ApplicationDesktopShortcut'
                         Name='Todo App'
                         Description='Projects, tasks and a notes canvas, one keystroke away'
-                        Target='[#exe0]'
-                        WorkingDirectory='Bin'
-                        Icon='ProductICO'/>
-                    <RegistryValue Root='HKLM'
-                        Key='SOFTWARE\thearpankumar\Todo App'
+                        Target='[Bin]todo_app.exe'
+                        WorkingDirectory='Bin'/>
+                    <RegistryValue Root='HKCU'
+                        Key='Software\thearpankumar\Todo App'
                         Name='DesktopShortcut'
                         Type='integer'
                         Value='1'
@@ -151,8 +149,8 @@
         <SetProperty Id='ARPINSTALLLOCATION' Value='[APPLICATIONFOLDER]' After='CostFinalize'/>
 
         <!-- Icon for the Start menu entry and the Add/Remove Programs listing. -->
-        <Icon Id='ProductICO' SourceFile='assets\icon.ico'/>
-        <Property Id='ARPPRODUCTICON' Value='ProductICO'/>
+        <Icon Id='ProductICO.ico' SourceFile='assets\icon.ico'/>
+        <Property Id='ARPPRODUCTICON' Value='ProductICO.ico'/>
         <Property Id='ARPHELPLINK' Value='https://github.com/thearpankumar/RustTodoApp'/>
         <Property Id='ARPURLINFOABOUT' Value='https://github.com/thearpankumar/RustTodoApp'/>
 
