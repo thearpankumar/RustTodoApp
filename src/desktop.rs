@@ -266,8 +266,9 @@ fn tray_icon() -> Option<tray_icon::Icon> {
 // Minimising keeps WS_VISIBLE set, so repaints still arrive and the loop parks
 // in `ControlFlow::Wait` between them, while WS_EX_TOOLWINDOW drops the window
 // from the taskbar and Alt+Tab so that a minimised window reads as a hidden
-// one. X11 and Wayland queue redraw requests inside winit rather than going
-// through the display server, so they were never affected and simply minimise.
+// one. On Linux there is no hiding at all: Wayland cannot hide a window and
+// tiling compositors ignore minimise, so hiding or closing quits the process and
+// the desktop shortcut (`todo_app --toggle`) starts it again.
 
 #[cfg(windows)]
 mod window_control {
@@ -444,7 +445,14 @@ impl Desktop {
             .and_then(|auto| auto.is_enabled().ok())
             .unwrap_or(false);
 
-        let (hotkeys, hotkey_active) = register_hotkey();
+        // On Linux the shortcut belongs to the desktop (`todo_app --toggle`): an
+        // in-process grab only reaches XWayland on Wayland, and since closing
+        // quits there, it could never bring the window back anyway.
+        let (hotkeys, hotkey_active) = if cfg!(target_os = "linux") {
+            (None, false)
+        } else {
+            register_hotkey()
+        };
         spawn_hotkey_listener(tx.clone(), ctx.clone());
         spawn_menu_listener(tx.clone(), ctx.clone());
         spawn_tray_click_listener(tx, ctx.clone());
@@ -553,8 +561,11 @@ fn build_tray(autostart_enabled: bool) -> Option<tray_icon::TrayIcon> {
     let build = || -> tray_icon::menu::Result<()> {
         menu.append(&show)?;
         menu.append(&PredefinedMenuItem::separator())?;
-        menu.append(&autostart)?;
-        menu.append(&PredefinedMenuItem::separator())?;
+        // Linux has no background instance to start at login; see main().
+        if !cfg!(target_os = "linux") {
+            menu.append(&autostart)?;
+            menu.append(&PredefinedMenuItem::separator())?;
+        }
         menu.append(&quit)
     };
 

@@ -63,20 +63,22 @@ todo_app --quit        # quit the running instance
 todo_app --background  # start into the tray without showing the window
 ```
 
-### Wayland
+### Linux
 
-Wayland compositors do not let applications grab keys - the compositor owns
-them - so the built-in hotkey only works on X11, Windows and macOS. On Wayland,
-register the shortcut with your desktop environment instead:
+On Linux the app only runs while its window is open. Wayland cannot hide a
+window and tiling compositors (Hyprland, sway) ignore minimise, so closing the
+window - including <kbd>Super</kbd>+<kbd>Q</kbd> - saves and quits, and the
+shortcut starts it again. There is no tray-resident mode, no built-in key grab
+and no start-at-login; `--toggle` opens the app if it is not running and quits
+it if it is. Register the shortcut with your desktop environment:
 
 ```bash
 scripts/install-hotkey-linux.sh
 ```
 
-It handles GNOME, Hyprland and sway automatically. For anything else, add a
-custom shortcut for <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>:</kbd> running
-`todo_app --toggle`. The app tells you in its own window when it could not grab
-the hotkey itself.
+It handles GNOME, Hyprland (both `hyprland.conf` and Lua configs, including
+Omarchy) and sway automatically. For anything else, add a custom shortcut for
+<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>:</kbd> running `todo_app --toggle`.
 
 ### Hyprland
 

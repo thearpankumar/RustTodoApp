@@ -72,6 +72,7 @@ struct TextBox {
     #[serde(default = "default_auto_height")]
     auto_height: bool,
 
+    #[serde(default)]
     min_size: egui::Vec2,
 }
 
@@ -79,7 +80,10 @@ fn default_auto_height() -> bool {
     true
 }
 
+// `default` on the containers: a save missing a field (older or newer schema)
+// must still load, or the next autosave would overwrite it with an empty app.
 #[derive(Serialize, Deserialize)]
+#[serde(default)]
 struct NotesCanvas {
     text_boxes: Vec<TextBox>,
     next_textbox_id: usize,
@@ -109,10 +113,12 @@ struct Project {
     id: usize,
     name: String,
     tasks: Vec<Task>,
+    #[serde(default)]
     expanded: bool,
 }
 
 #[derive(Serialize, Deserialize)]
+#[serde(default)]
 struct TodoApp {
     projects: Vec<Project>,
     next_project_id: usize,
@@ -150,6 +156,16 @@ struct TodoApp {
     editing_title: Option<usize>, // ID of textbox whose title is being edited
     #[serde(skip)]
     temp_title_text: String,
+    /// Set when an edit field opens so it takes keyboard focus on its first frame.
+    #[serde(skip)]
+    focus_pending: bool,
+    /// How far the floating pen button was dragged from its corner. Not saved:
+    /// every launch starts it back in the corner.
+    #[serde(skip)]
+    pen_offset: egui::Vec2,
+    /// Where each note was drawn last frame, for the right-click hit test.
+    #[serde(skip)]
+    note_rects: HashMap<usize, egui::Rect>,
 
     // Desktop integration: tray icon, global hotkey, start-at-login
     /// False until the app has decided once whether to start at login, so the
@@ -202,6 +218,9 @@ impl Default for TodoApp {
             commonmark_cache: CommonMarkCache::default(),
             editing_title: None,
             temp_title_text: String::new(),
+            focus_pending: false,
+            pen_offset: egui::Vec2::ZERO,
+            note_rects: HashMap::new(),
             autostart_configured: false,
             desktop: None,
             window_visible: true,
@@ -273,7 +292,7 @@ impl TodoApp {
     ) {
         // Only a real install should register itself to start at login; a debug
         // build would point the login entry at target/debug.
-        if !self.autostart_configured && !cfg!(debug_assertions) {
+        if !self.autostart_configured && !cfg!(debug_assertions) && !cfg!(target_os = "linux") {
             integration.set_autostart(true);
             self.autostart_configured = true;
         }
@@ -322,7 +341,11 @@ impl TodoApp {
 
         // Closing the window keeps the app alive in the tray, which is what
         // makes the global hotkey work at all - it needs the process running.
-        if ctx.input(|i| i.viewport().close_requested()) && !self.quitting {
+        // Not on Linux: there a close (e.g. SUPER+Q) really quits, see hide_window.
+        if ctx.input(|i| i.viewport().close_requested())
+            && !self.quitting
+            && !cfg!(target_os = "linux")
+        {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.hide_window(ctx);
         }
@@ -364,6 +387,13 @@ impl TodoApp {
     }
 
     fn hide_window(&mut self, ctx: &egui::Context) {
+        // Wayland has no hide and Hyprland/sway ignore minimise, so on Linux the
+        // app lives only while visible: hiding quits, the DE shortcut relaunches.
+        if cfg!(target_os = "linux") {
+            self.quitting = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
         desktop::hide_window(ctx);
         self.set_window_visible(false);
     }
@@ -426,17 +456,25 @@ impl eframe::App for TodoApp {
 
 impl TodoApp {
     fn render_floating_pen_button(&mut self, ctx: &egui::Context) {
+        const BUTTON_SIZE: f32 = 60.0;
+        const MARGIN: f32 = 20.0;
+
+        // Kept relative to the bottom-right corner, so a window resize (e.g. the
+        // compositor tiling it after the first frame) doesn't leave it adrift.
         egui::Area::new(egui::Id::new("floating_pen_button"))
-            .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-20.0, -20.0))
+            .anchor(
+                egui::Align2::RIGHT_BOTTOM,
+                egui::vec2(-MARGIN, -MARGIN) + self.pen_offset,
+            )
             .show(ctx, |ui| {
-                let button_size = 60.0;
+                let button_size = BUTTON_SIZE;
                 let pen_icon = if self.show_notes {
                     icons::icons::ICON_CLOSE // X to close notes
                 } else {
                     icons::icons::ICON_EDIT // Pen to open notes
                 };
 
-                if ui
+                let response = ui
                     .add_sized(
                         [button_size, button_size],
                         egui::Button::new(
@@ -445,10 +483,19 @@ impl TodoApp {
                                 .color(egui::Color32::WHITE),
                         )
                         .fill(ACCENT)
-                        .corner_radius(30.0),
+                        .corner_radius(30.0)
+                        .sense(egui::Sense::click_and_drag()),
                     )
-                    .clicked()
-                {
+                    .on_hover_cursor(egui::CursorIcon::Grab);
+
+                // Drag to move (within the window), click to toggle the notes.
+                if response.dragged() {
+                    let room =
+                        ctx.content_rect().size() - egui::Vec2::splat(BUTTON_SIZE + 2.0 * MARGIN);
+                    self.pen_offset = (self.pen_offset + response.drag_delta())
+                        .clamp(-room.max(egui::Vec2::ZERO), egui::Vec2::ZERO);
+                }
+                if response.clicked() {
                     self.show_notes = !self.show_notes;
                 }
             });
@@ -480,45 +527,39 @@ impl TodoApp {
                             );
                             ui.label(
                                 egui::RichText::new(
-                                    whoami::username()
-                                        .unwrap_or_else(|_| "Unknown".to_string()),
+                                    whoami::username().unwrap_or_else(|_| "Unknown".to_string()),
                                 )
                                 .size(label_size)
                                 .strong(),
                             );
                         });
 
-                        ui.with_layout(
-                            egui::Layout::right_to_left(egui::Align::Center),
-                            |ui| {
-                                let now = Local::now();
-                                ui.label(
-                                    egui::RichText::new(now.format("%d/%m/%Y").to_string())
-                                        .size(label_size),
-                                );
-                                ui.add_space(6.0);
-                                ui.label(
-                                    egui::RichText::new(icons::icons::ICON_CALENDAR_MONTH)
-                                        .size(label_size)
-                                        .color(ui.visuals().weak_text_color()),
-                                );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let now = Local::now();
+                            ui.label(
+                                egui::RichText::new(now.format("%d/%m/%Y").to_string())
+                                    .size(label_size),
+                            );
+                            ui.add_space(6.0);
+                            ui.label(
+                                egui::RichText::new(icons::icons::ICON_CALENDAR_MONTH)
+                                    .size(label_size)
+                                    .color(ui.visuals().weak_text_color()),
+                            );
 
-                                // Centred in whatever is left between the two blocks.
-                                ui.with_layout(
-                                    egui::Layout::centered_and_justified(
-                                        egui::Direction::LeftToRight,
-                                    ),
-                                    |ui| {
-                                        ui.label(
-                                            egui::RichText::new("Todo App")
-                                                .size(heading_size)
-                                                .strong()
-                                                .color(ACCENT_TEXT),
-                                        );
-                                    },
-                                );
-                            },
-                        );
+                            // Centred in whatever is left between the two blocks.
+                            ui.with_layout(
+                                egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
+                                |ui| {
+                                    ui.label(
+                                        egui::RichText::new("Todo App")
+                                            .size(heading_size)
+                                            .strong()
+                                            .color(ACCENT_TEXT),
+                                    );
+                                },
+                            );
+                        });
                     });
 
                     ui.add_space(10.0);
@@ -545,9 +586,7 @@ impl TodoApp {
 
                                 ui.add_space(6.0);
                                 ui.label(
-                                    egui::RichText::new("New Project")
-                                        .size(label_size)
-                                        .strong(),
+                                    egui::RichText::new("New Project").size(label_size).strong(),
                                 );
                                 ui.add_space(6.0);
 
@@ -626,8 +665,10 @@ impl TodoApp {
             ui.add_space(16.0);
 
             // Simplified instruction for users
-            ui.horizontal(|ui| {
-                ui.label(
+            // Hints wrap: an unwrapped line widens the whole page and pushes the
+            // project buttons off the right edge of a narrow window.
+            ui.add(
+                egui::Label::new(
                     egui::RichText::new(format!(
                         "Right-click on the expand/collapse button ({}/{}) to add tasks directly!",
                         icons::icons::ICON_CHEVRON_RIGHT,
@@ -635,27 +676,33 @@ impl TodoApp {
                     ))
                     .size(label_size)
                     .color(egui::Color32::GRAY),
-                );
-            });
+                )
+                .wrap(),
+            );
 
-            ui.horizontal(|ui| {
-                let hotkey_hint = if self.hotkey_active() {
+            {
+                let hotkey_hint = if cfg!(target_os = "linux") {
+                    "Bind `todo_app --toggle` to a key to open or close this window.".to_string()
+                } else if self.hotkey_active() {
                     format!(
                         "Press {} anywhere to show or hide this window.",
                         desktop::HOTKEY_LABEL
                     )
                 } else {
                     format!(
-                        "{} could not be registered. On Wayland, run                          /usr/share/todo_app/install-hotkey-linux.sh to bind it                          in your desktop environment.",
+                        "{} could not be registered; another application may already own it.",
                         desktop::HOTKEY_LABEL
                     )
                 };
-                ui.label(
-                    egui::RichText::new(hotkey_hint)
-                        .size(label_size)
-                        .color(egui::Color32::GRAY),
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(hotkey_hint)
+                            .size(label_size)
+                            .color(egui::Color32::GRAY),
+                    )
+                    .wrap(),
                 );
-            });
+            }
 
             ui.add_space(16.0);
 
@@ -712,6 +759,9 @@ impl TodoApp {
                                                 )
                                                 .desired_width(edit_width),
                                             );
+                                            if std::mem::take(&mut self.focus_pending) {
+                                                response.request_focus();
+                                            }
                                             if response.lost_focus()
                                                 && ui.input(|i| i.key_pressed(egui::Key::Enter))
                                             {
@@ -826,6 +876,9 @@ impl TodoApp {
                                                             )
                                                             .desired_width(edit_width),
                                                         );
+                                                        if std::mem::take(&mut self.focus_pending) {
+                                                            response.request_focus();
+                                                        }
                                                         if response.lost_focus()
                                                             && ui.input(|i| {
                                                                 i.key_pressed(egui::Key::Enter)
@@ -953,6 +1006,9 @@ impl TodoApp {
                                                         .unwrap();
                                                     let response =
                                                         ui.text_edit_singleline(task_text);
+                                                    if std::mem::take(&mut self.focus_pending) {
+                                                        response.request_focus();
+                                                    }
 
                                                     if ui.button(icons::icons::ICON_CHECK).clicked()
                                                         || (response.lost_focus()
@@ -1005,12 +1061,14 @@ impl TodoApp {
                     "start_edit" => {
                         self.editing_project = Some(project_id);
                         self.edit_project_text = text;
+                        self.focus_pending = true;
                     }
                     "stop_edit" => {
                         self.editing_project = None;
                     }
                     "add_task" => {
                         self.adding_task_to_project = Some(project_id);
+                        self.focus_pending = true;
                         // Initialize the text field for this project if it doesn't exist
                         self.right_click_task_text.entry(project_id).or_default();
                     }
@@ -1033,6 +1091,7 @@ impl TodoApp {
                     "start_edit" => {
                         self.editing_task = Some((project_id, task_id));
                         self.edit_task_text = text;
+                        self.focus_pending = true;
                     }
                     "stop_edit" => {
                         self.editing_task = None;
@@ -1054,19 +1113,13 @@ impl TodoApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             let rect = ui.max_rect();
 
-            // Detect middle mouse or two-finger drag for panning
-            let canvas_response = ui.interact(
-                rect,
-                egui::Id::new("canvas_interact"),
-                egui::Sense::click_and_drag(),
-            );
-
-            // Pan with middle mouse button
-            if canvas_response.dragged_by(egui::PointerButton::Middle) {
-                self.notes_canvas.scene_rect = self
-                    .notes_canvas
-                    .scene_rect
-                    .translate(canvas_response.drag_delta());
+            // Pan with middle mouse button. Read from raw input rather than a
+            // canvas widget, which the notes drawn on top would shadow.
+            if ui.rect_contains_pointer(rect) {
+                let middle_delta = ui.input(|i| i.pointer.middle_down().then(|| i.pointer.delta()));
+                if let Some(delta) = middle_delta {
+                    self.notes_canvas.scene_rect = self.notes_canvas.scene_rect.translate(delta);
+                }
             }
 
             // Pan with two-finger trackpad drag
@@ -1174,6 +1227,7 @@ impl TodoApp {
     fn render_text_boxes(&mut self, ui: &mut egui::Ui) {
         let mut actions: Vec<(&str, usize)> = Vec::new(); // (action, textbox_id)
         let pan_offset = self.notes_canvas.scene_rect.min.to_vec2();
+        self.note_rects.clear();
 
         // Iterate through text boxes (render in order for z-ordering)
         for text_box_idx in 0..self.notes_canvas.text_boxes.len() {
@@ -1286,12 +1340,15 @@ impl TodoApp {
                                                 .font(egui::FontId::proportional(15.0)),
                                         );
 
+                                        if std::mem::take(&mut self.focus_pending) {
+                                            response.request_focus();
+                                        }
+                                        // Escape cancels; Enter or clicking away saves.
                                         if response.lost_focus() {
-                                            if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                                                actions.push(("save_title", textbox_id));
-                                            } else if ui.input(|i| i.key_pressed(egui::Key::Escape))
-                                            {
+                                            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                                                 actions.push(("cancel_title_edit", textbox_id));
+                                            } else {
+                                                actions.push(("save_title", textbox_id));
                                             }
                                         }
                                     } else {
@@ -1366,6 +1423,9 @@ impl TodoApp {
                             .font(egui::FontId::proportional(15.0))
                             .desired_width(ui.available_width()),
                     );
+                    if std::mem::take(&mut self.focus_pending) {
+                        response.request_focus();
+                    }
 
                     if response.clicked_elsewhere() {
                         actions.push(("stop_editing", textbox_id));
@@ -1408,14 +1468,14 @@ impl TodoApp {
                         }
                     });
 
+                    // Raw input, not an overlay widget: one laid over the markdown
+                    // would swallow clicks on its links.
                     if !text_box.content.is_empty()
-                        && ui
-                            .interact(
-                                scroll_response.inner_rect,
-                                id.with("view_interact"),
-                                egui::Sense::click(),
-                            )
-                            .double_clicked()
+                        && ui.rect_contains_pointer(scroll_response.inner_rect)
+                        && ui.input(|i| {
+                            i.pointer
+                                .button_double_clicked(egui::PointerButton::Primary)
+                        })
                     {
                         actions.push(("start_editing", textbox_id));
                     }
@@ -1426,6 +1486,7 @@ impl TodoApp {
 
             let header_drag_delta = inner_response.inner;
             let response = inner_response.response;
+            self.note_rects.insert(textbox_id, response.rect);
 
             // Handle dragging (Position Update)
             let text_box = &mut self.notes_canvas.text_boxes[text_box_idx];
@@ -1517,6 +1578,7 @@ impl TodoApp {
                     {
                         self.editing_title = Some(textbox_id);
                         self.temp_title_text = textbox.title.clone();
+                        self.focus_pending = true;
                     }
                 }
                 "save_title" => {
@@ -1539,6 +1601,7 @@ impl TodoApp {
                 }
                 "start_editing" => {
                     self.editing_textbox = Some(textbox_id);
+                    self.focus_pending = true;
                 }
                 "stop_editing" => {
                     self.editing_textbox = None;
@@ -1563,25 +1626,22 @@ impl TodoApp {
 
     fn handle_context_menu(&mut self, ui: &mut egui::Ui) {
         let pan_offset = self.notes_canvas.scene_rect.min.to_vec2();
-
-        // Detect right-click
-        ui.input(|i| {
-            if i.pointer.secondary_clicked() {
-                if let Some(screen_pos) = i.pointer.interact_pos() {
-                    // Convert screen position to canvas position
-                    let canvas_pos = screen_pos - pan_offset;
-
-                    // Check if click is not on any text box
-                    let on_textbox = self.notes_canvas.text_boxes.iter().any(|tb| {
-                        egui::Rect::from_min_size(tb.position, tb.size).contains(canvas_pos)
-                    });
-
-                    if !on_textbox {
-                        self.context_menu_pos = Some(screen_pos);
-                    }
-                }
-            }
+        // Detect right-click on empty canvas, tested against where each note
+        // was actually drawn this frame.
+        let click = ui.input(|i| {
+            i.pointer
+                .secondary_clicked()
+                .then(|| i.pointer.interact_pos())
+                .flatten()
         });
+        if let Some(screen_pos) = click {
+            let on_textbox = self.note_rects.values().any(|r| r.contains(screen_pos));
+            // Floating buttons and popups live on their own layers, not the canvas.
+            let on_canvas = ui.ctx().layer_id_at(screen_pos) == Some(ui.layer_id());
+            if !on_textbox && on_canvas {
+                self.context_menu_pos = Some(screen_pos);
+            }
+        }
 
         // Show context menu
         if let Some(menu_screen_pos) = self.context_menu_pos {
@@ -1778,6 +1838,17 @@ fn main() -> Result<(), eframe::Error> {
         desktop::Startup::Forwarded => return Ok(()),
     };
 
+    // Nothing is running, so there is nothing to hide or quit - don't open a
+    // window just to honour that. On Linux the app only exists while visible,
+    // so a background (login) start has nothing to do either.
+    if matches!(
+        cli.command,
+        Some(desktop::Command::Hide | desktop::Command::Quit)
+    ) || (cli.background && cfg!(target_os = "linux"))
+    {
+        return Ok(());
+    }
+
     // Setting app_id below moves eframe's storage directory, so bring any state
     // written by an earlier release along with it.
     desktop::migrate_legacy_storage();
@@ -1791,6 +1862,11 @@ fn main() -> Result<(), eframe::Error> {
             .with_inner_size(DEFAULT_WINDOW_SIZE)
             .with_min_inner_size(MIN_WINDOW_SIZE)
             .with_visible(!cli.background),
+        // On Wayland a vsynced eglSwapBuffers blocks until the compositor sends a
+        // frame callback, which it never does for a window on another workspace;
+        // the stalled loop stops answering pings and Hyprland flags the app as
+        // not responding. Repaints are input-driven, so vsync buys nothing here.
+        vsync: !cfg!(target_os = "linux"),
         ..Default::default()
     };
 

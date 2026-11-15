@@ -13,7 +13,7 @@
 set -euo pipefail
 
 COMMAND="todo_app --toggle"
-MARKER="# Todo App global hotkey (installed by install-hotkey-linux.sh)"
+MARKER="Todo App global hotkey (installed by install-hotkey-linux.sh)"
 
 say() { printf '%s\n' "$*"; }
 warn() { printf '%s\n' "$*" >&2; }
@@ -49,8 +49,9 @@ install_gnome() {
     say "GNOME: bound <Control><Shift>semicolon to '$COMMAND'."
 }
 
+# append_once FILE LINE [COMMENT_PREFIX]
 append_once() {
-    local file=$1 line=$2
+    local file=$1 line=$2 comment=${3:-#}
     mkdir -p "$(dirname "$file")"
     touch "$file"
 
@@ -59,7 +60,7 @@ append_once() {
         return
     fi
 
-    printf '\n%s\n%s\n' "$MARKER" "$line" >>"$file"
+    printf '\n%s %s\n%s\n' "$comment" "$MARKER" "$line" >>"$file"
     say "Appended the binding to $file."
 }
 
@@ -73,8 +74,24 @@ case "${desktop,,}" in
     install_gnome
     ;;
 *hyprland*)
-    append_once "${HOME}/.config/hypr/hyprland.conf" \
-        "bind = CTRL SHIFT, semicolon, exec, $COMMAND"
+    hypr="${HOME}/.config/hypr"
+    if [[ -f "$hypr/hyprland.lua" ]]; then
+        # Lua config: Omarchy loads personal bindings from bindings.lua and
+        # provides o.bind; plain Hyprland Lua uses hl.bind.
+        if grep -q 'o\.bind' "$hypr/bindings.lua" 2>/dev/null; then
+            line="o.bind(\"CTRL + SHIFT + SEMICOLON\", \"Todo App\", \"$COMMAND\")"
+        else
+            line="hl.bind(\"CTRL + SHIFT + SEMICOLON\", hl.dsp.exec_cmd(\"$COMMAND\"))"
+        fi
+        if [[ -f "$hypr/bindings.lua" ]]; then
+            append_once "$hypr/bindings.lua" "$line" --
+        else
+            append_once "$hypr/hyprland.lua" "$line" --
+        fi
+    else
+        append_once "$hypr/hyprland.conf" \
+            "bind = CTRL SHIFT, semicolon, exec, $COMMAND"
+    fi
     say "Reload Hyprland (hyprctl reload) to pick it up."
     ;;
 *sway*)
